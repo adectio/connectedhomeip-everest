@@ -17,11 +17,14 @@
  */
 
 #include <AppMain.h>
+#include <EverestMqttThread.h>
 #include <EnergyEvseMain.h>
 #include <EnergyManagementAppCmdLineOptions.h>
 #include <Identify.h>
 #include <app-common/zap-generated/cluster-objects.h>
 #include <lib/support/BitMask.h>
+
+#include <memory>
 
 using namespace chip;
 using namespace chip::app;
@@ -39,6 +42,10 @@ static bool EnergyAppOptionHandler(const char * aProgram, chip::ArgParser::Optio
 constexpr uint16_t kOptionFeatureMap = 0xffd1;
 
 constexpr chip::EndpointId kEvseEndpoint = 1;
+
+namespace {
+std::unique_ptr<EverestMqttThread> gEverestMqttThread;
+} // namespace
 
 // Define the chip::ArgParser command line structures for extending the command line to support the
 // energy apps
@@ -96,11 +103,18 @@ void ApplicationInit()
     ChipLogDetail(AppServer, "EVSE App: ApplicationInit()");
     SuccessOrDie(IdentifyInit());
     EvseApplicationInit();
+    gEverestMqttThread = std::make_unique<EverestMqttThread>(EverestMqttThread::Config{});
+    gEverestMqttThread->Start();
 }
 
 void ApplicationShutdown()
 {
     ChipLogDetail(AppServer, "EVSE App: ApplicationShutdown()");
+    if (gEverestMqttThread)
+    {
+        gEverestMqttThread->Stop();
+        gEverestMqttThread.reset();
+    }
     EvseApplicationShutdown();
 }
 

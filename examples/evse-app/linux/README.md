@@ -29,9 +29,9 @@ details.
 
 ## Building
 
--   Install tool chain
+-   Install tool chain and Linux MQTT client dependency
 
-                $ sudo apt-get install git gcc g++ python pkg-config libssl-dev libdbus-1-dev libglib2.0-dev ninja-build python3-venv python3-dev unzip
+                $ sudo apt-get install git gcc g++ python pkg-config libssl-dev libdbus-1-dev libglib2.0-dev libmosquitto-dev ninja-build python3-venv python3-dev unzip
 
 -   Build the example application:
 
@@ -40,6 +40,10 @@ details.
                 $ source third_party/connectedhomeip/scripts/activate.sh
                 $ gn gen out/debug
                 $ ninja -C out/debug
+
+    The Linux EVSE example now links against ``libmosquitto`` for the external
+    MQTT bridge to EVerest, so the development package must be present on the
+    build host.
 
 -   To delete generated executable, libraries and object files use:
 

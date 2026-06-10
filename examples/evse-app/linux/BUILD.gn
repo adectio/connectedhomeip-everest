@@ -12,8 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import("//build_overrides/build.gni")
 import("//build_overrides/chip.gni")
 
+import("${build_root}/config/linux/pkg_config.gni")
 import("${chip_root}/build/chip/tools.gni")
 import("${chip_root}/src/app/common_flags.gni")
 import("${chip_root}/third_party/imgui/imgui.gni")
@@ -32,7 +34,13 @@ config("includes") {
   ]
 }
 
+pkg_config("mosquitto") {
+  packages = [ "libmosquitto" ]
+}
+
 executable("chip-evse-app") {
+  configs += [ ":mosquitto" ]
+
   sources = [
     # EVSE Common sources not in evse-common-lib
     "${chip_root}/examples/evse-app/evse-common/src/EVSEManufacturerImpl.cpp",
@@ -43,7 +51,9 @@ executable("chip-evse-app") {
     "${chip_root}/examples/evse-app/evse-common/src/EnergyEvseTargetsStore.cpp",
 
     # Application
+    "EverestMqttThread.cpp",
     "include/CHIPProjectAppConfig.h",
+    "include/EverestMqttThread.h",
     "main.cpp",
   ]
 
