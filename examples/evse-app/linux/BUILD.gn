@@ -64,6 +64,7 @@ executable("chip-evse-app") {
     "${chip_root}/examples/platform/linux:app-main",
     "${chip_root}/src/app:attribute-persistence",
     "${chip_root}/src/lib",
+    "${chip_root}/third_party/jsoncpp",
   ]
 
   include_dirs = [
