@@ -47,6 +47,11 @@ namespace {
 std::unique_ptr<EverestMqttThread> gEverestMqttThread;
 } // namespace
 
+EverestMqttThread * GetEverestMqttThread()
+{
+    return gEverestMqttThread.get();
+}
+
 // Define the chip::ArgParser command line structures for extending the command line to support the
 // energy apps
 static chip::ArgParser::OptionDef sEnergyAppOptionDefs[] = {

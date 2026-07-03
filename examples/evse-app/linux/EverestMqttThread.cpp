@@ -44,6 +44,7 @@ constexpr int kKeepAliveSeconds         = 60;
 constexpr int kLoopTimeoutMs            = 1000;
 constexpr int kReconnectDelaySeconds    = 1;
 constexpr int kReconnectDelayMaxSeconds = 5;
+constexpr std::chrono::seconds kCommandTimeout{ 5 };
 
 struct MatterEvseUpdate
 {
@@ -249,6 +250,63 @@ bool ParseEVerestVarPayload(const std::string & payload, Json::Value & data)
     return true;
 }
 
+bool ParseEVerestCmdResultPayload(const std::string & payload, std::string & id, std::optional<bool> & retval,
+                                  std::string & error)
+{
+    Json::CharReaderBuilder builder;
+    builder["collectComments"] = false;
+
+    Json::Value data;
+    std::string parseErrors;
+    std::istringstream stream(payload);
+    if (!Json::parseFromStream(builder, stream, &data, &parseErrors))
+    {
+        error = parseErrors;
+        return false;
+    }
+
+    if (!data.isObject() || !data["msg_type"].isString() || data["msg_type"].asString() != "CmdResult")
+    {
+        error = "Unexpected command response envelope";
+        return false;
+    }
+
+    const Json::Value & outerData = data["data"];
+    const Json::Value & innerData = outerData["data"];
+    if (!outerData.isObject() || !innerData.isObject() || !innerData["id"].isString())
+    {
+        error = "Malformed command response payload";
+        return false;
+    }
+
+    id = innerData["id"].asString();
+    if (innerData.isMember("error"))
+    {
+        const Json::Value & err = innerData["error"];
+        error = err["msg"].isString() ? err["msg"].asString() : "Unknown EVerest command error";
+        retval.reset();
+        return true;
+    }
+
+    if (!innerData["retval"].isBool())
+    {
+        error = "Command response missing boolean retval";
+        return false;
+    }
+
+    retval = innerData["retval"].asBool();
+    error.clear();
+    return true;
+}
+
+std::string JsonToString(const Json::Value & value)
+{
+    Json::StreamWriterBuilder builder;
+    builder["commentStyle"] = "None";
+    builder["indentation"] = "";
+    return Json::writeString(builder, value);
+}
+
 std::optional<int64_t> JsonCurrentToMilliAmps(const Json::Value & value)
 {
     if (!value.isNumeric())
@@ -396,6 +454,8 @@ SessionEventSelector ParseSessionEventSelector(std::string_view event)
 
 EverestMqttThread::EverestMqttThread(Config config) :
     mConfig(std::move(config)),
+    mEnableDisableResponseTopic(BuildCmdResponseTopic("enable_disable")),
+    mResumeChargingResponseTopic(BuildCmdResponseTopic("resume_charging")),
     mHwCapabilitiesTopic(BuildVarTopic("hw_capabilities")),
     mEvInfoTopic(BuildVarTopic("ev_info")),
     mPowermeterTopic(BuildVarTopic("powermeter")),
@@ -453,6 +513,50 @@ void EverestMqttThread::RequestReconnect()
 EverestMqttThread::ConnectionState EverestMqttThread::GetConnectionState() const
 {
     return mConnectionState.load();
+}
+
+void EverestMqttThread::HandleMatterStateChange(chip::app::Clusters::EnergyEvse::StateEnum state,
+                                                chip::app::Clusters::EnergyEvse::SupplyStateEnum supplyState)
+{
+    static_cast<void>(state);
+
+    if (mLastForwardedSupplyState == static_cast<int>(supplyState))
+    {
+        return;
+    }
+
+    bool success = false;
+    switch (supplyState)
+    {
+    case chip::app::Clusters::EnergyEvse::SupplyStateEnum::kDisabled:
+    case chip::app::Clusters::EnergyEvse::SupplyStateEnum::kDisabledError:
+    case chip::app::Clusters::EnergyEvse::SupplyStateEnum::kDisabledDiagnostics:
+        success = SendEnableDisableCommand(false);
+        break;
+    case chip::app::Clusters::EnergyEvse::SupplyStateEnum::kChargingEnabled:
+        success = SendEnableDisableCommand(true);
+        if (success)
+        {
+            SendResumeChargingCommand();
+        }
+        break;
+    case chip::app::Clusters::EnergyEvse::SupplyStateEnum::kDischargingEnabled:
+    case chip::app::Clusters::EnergyEvse::SupplyStateEnum::kEnabled:
+        // EVerest's public EVSE manager API does not currently expose a dedicated "enable discharging" command,
+        // so bridge this to a generic enable for now and rely on the existing BPT/export configuration path.
+        success = SendEnableDisableCommand(true);
+        break;
+    case chip::app::Clusters::EnergyEvse::SupplyStateEnum::kUnknownEnumValue:
+    default:
+        ChipLogError(AppServer, "[%s] Unsupported Matter supply state %d for EVerest command forwarding", kLogModule,
+                     static_cast<int>(supplyState));
+        return;
+    }
+
+    if (success)
+    {
+        mLastForwardedSupplyState = static_cast<int>(supplyState);
+    }
 }
 
 void EverestMqttThread::HandleConnect(struct mosquitto * mosq, void * obj, int rc)
@@ -642,7 +746,8 @@ bool EverestMqttThread::SubscribeTopics()
         return false;
     }
 
-    const char * const topics[] = { mHwCapabilitiesTopic.c_str(), mEvInfoTopic.c_str(), mPowermeterTopic.c_str(),
+    const char * const topics[] = { mEnableDisableResponseTopic.c_str(), mResumeChargingResponseTopic.c_str(),
+                                    mHwCapabilitiesTopic.c_str(), mEvInfoTopic.c_str(), mPowermeterTopic.c_str(),
                                     mLimitsTopic.c_str(), mSessionEventTopic.c_str() };
     for (const char * topic : topics)
     {
@@ -658,36 +763,210 @@ bool EverestMqttThread::SubscribeTopics()
     return true;
 }
 
+std::string EverestMqttThread::BuildCmdTopic(const std::string & cmdName) const
+{
+    return mConfig.everestPrefix + "/modules/" + mConfig.evseModuleId + "/impl/" + mConfig.evseImplementationId +
+        "/cmd/" + cmdName;
+}
+
+std::string EverestMqttThread::BuildCmdResponseTopic(const std::string & cmdName) const
+{
+    return BuildCmdTopic(cmdName) + "/response/" + mConfig.clientId;
+}
+
 std::string EverestMqttThread::BuildVarTopic(const std::string & varName) const
 {
     return mConfig.everestPrefix + "/modules/" + mConfig.evseModuleId + "/impl/" + mConfig.evseImplementationId +
         "/var/" + varName;
 }
 
+EverestMqttThread::CommandSelector EverestMqttThread::SelectCommandTopic(const std::string & topic) const
+{
+    if (topic == mEnableDisableResponseTopic)
+    {
+        return CommandSelector::EnableDisableResponse;
+    }
+    if (topic == mResumeChargingResponseTopic)
+    {
+        return CommandSelector::ResumeChargingResponse;
+    }
+    return CommandSelector::Unknown;
+}
+
 void EverestMqttThread::HandleMessage(const std::string & topic, const std::string & payload)
 {
-    switch (ParseTopicSelector(topic))
+    switch (SelectCommandTopic(topic))
     {
-    case TopicSelector::kHwCapabilities:
-        HandleHwCapabilitiesMessage(payload);
+    case CommandSelector::EnableDisableResponse:
+    case CommandSelector::ResumeChargingResponse:
+        HandleCommandResponse(SelectCommandTopic(topic), payload);
         break;
-    case TopicSelector::kEvInfo:
-        HandleEvInfoMessage(payload);
+    case CommandSelector::Unknown:
+        switch (ParseTopicSelector(topic))
+        {
+        case TopicSelector::kHwCapabilities:
+            HandleHwCapabilitiesMessage(payload);
+            break;
+        case TopicSelector::kEvInfo:
+            HandleEvInfoMessage(payload);
+            break;
+        case TopicSelector::kPowermeter:
+            HandlePowermeterMessage(payload);
+            break;
+        case TopicSelector::kLimits:
+            HandleLimitsMessage(payload);
+            break;
+        case TopicSelector::kSessionEvent:
+            HandleSessionEventMessage(payload);
+            break;
+        case TopicSelector::kUnknown:
+        default:
+            ChipLogError(AppServer, "[%s] Received message on unexpected topic %s", kLogModule, topic.c_str());
+            break;
+        }
         break;
-    case TopicSelector::kPowermeter:
-        HandlePowermeterMessage(payload);
-        break;
-    case TopicSelector::kLimits:
-        HandleLimitsMessage(payload);
-        break;
-    case TopicSelector::kSessionEvent:
-        HandleSessionEventMessage(payload);
-        break;
-    case TopicSelector::kUnknown:
     default:
-        ChipLogError(AppServer, "[%s] Received message on unexpected topic %s", kLogModule, topic.c_str());
         break;
     }
+}
+
+void EverestMqttThread::HandleCommandResponse(CommandSelector selector, const std::string & payload)
+{
+    static_cast<void>(selector);
+
+    std::string id;
+    std::string error;
+    std::optional<bool> retval;
+    if (!ParseEVerestCmdResultPayload(payload, id, retval, error))
+    {
+        ChipLogError(AppServer, "[%s] Failed to parse EVerest command response: %s", kLogModule, error.c_str());
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(mCommandMutex);
+        const auto it = mPendingCommands.find(id);
+        if (it == mPendingCommands.end())
+        {
+            return;
+        }
+
+        it->second.completed = true;
+        it->second.accepted = !retval.has_value() ? false : true;
+        it->second.retval = retval;
+        it->second.error = error;
+    }
+
+    mCommandCondition.notify_all();
+}
+
+bool EverestMqttThread::SendEnableDisableCommand(bool enable)
+{
+    Json::Value args(Json::objectValue);
+    args["connector_id"] = static_cast<Json::UInt>(mConfig.connectorId);
+
+    Json::Value cmdSource(Json::objectValue);
+    cmdSource["enable_source"] = "LocalAPI";
+    cmdSource["enable_state"] = enable ? "Enable" : "Disable";
+    cmdSource["enable_priority"] = 500;
+    args["cmd_source"] = std::move(cmdSource);
+
+    // Matter EnableCharging / EnableDischarging / Disable all converge on EVerest's enable_disable API.
+    return SendEVerestCommand("enable_disable", mEnableDisableResponseTopic, JsonToString(args), enable);
+}
+
+bool EverestMqttThread::SendResumeChargingCommand()
+{
+    // When Matter enables charging, EVerest may also need a resume_charging command to leave an EVSE pause state.
+    return SendEVerestCommand("resume_charging", mResumeChargingResponseTopic, "{}", true);
+}
+
+bool EverestMqttThread::SendEVerestCommand(const std::string & cmdName, const std::string & responseTopic,
+                                           const std::string & argsPayload, std::optional<bool> expectedRetval)
+{
+    if (mMosquitto == nullptr)
+    {
+        ChipLogError(AppServer, "[%s] Cannot send EVerest command %s while MQTT client is disconnected", kLogModule,
+                     cmdName.c_str());
+        return false;
+    }
+
+    Json::CharReaderBuilder readerBuilder;
+    readerBuilder["collectComments"] = false;
+    Json::Value args;
+    std::string parseErrors;
+    std::istringstream argsStream(argsPayload);
+    if (!Json::parseFromStream(readerBuilder, argsStream, &args, &parseErrors))
+    {
+        ChipLogError(AppServer, "[%s] Failed to build args for command %s: %s", kLogModule, cmdName.c_str(),
+                     parseErrors.c_str());
+        return false;
+    }
+
+    const std::string callId = NextCommandId();
+
+    Json::Value payload(Json::objectValue);
+    payload["msg_type"] = "Cmd";
+    payload["data"]["id"] = callId;
+    payload["data"]["origin"] = mConfig.clientId;
+    payload["data"]["args"] = std::move(args);
+
+    const std::string payloadString = JsonToString(payload);
+    {
+        std::lock_guard<std::mutex> lock(mCommandMutex);
+        PendingCommand pending;
+        pending.expectedRetval = expectedRetval;
+        mPendingCommands.emplace(callId, std::move(pending));
+    }
+
+    const int rc = mosquitto_publish(mMosquitto, nullptr, BuildCmdTopic(cmdName).c_str(),
+                                     static_cast<int>(payloadString.size()), payloadString.data(), 2, false);
+    if (rc != MOSQ_ERR_SUCCESS)
+    {
+        std::lock_guard<std::mutex> lock(mCommandMutex);
+        mPendingCommands.erase(callId);
+        ChipLogError(AppServer, "[%s] Failed to publish EVerest command %s rc=%d", kLogModule, cmdName.c_str(), rc);
+        return false;
+    }
+
+    std::unique_lock<std::mutex> lock(mCommandMutex);
+    const bool completed = mCommandCondition.wait_for(lock, kCommandTimeout, [this, &callId] {
+        const auto it = mPendingCommands.find(callId);
+        return it != mPendingCommands.end() && it->second.completed;
+    });
+
+    if (!completed)
+    {
+        mPendingCommands.erase(callId);
+        ChipLogError(AppServer, "[%s] Timeout waiting for EVerest response to %s on %s", kLogModule, cmdName.c_str(),
+                     responseTopic.c_str());
+        return false;
+    }
+
+    const PendingCommand result = mPendingCommands.at(callId);
+    mPendingCommands.erase(callId);
+    if (!result.error.empty())
+    {
+        ChipLogError(AppServer, "[%s] EVerest command %s failed: %s", kLogModule, cmdName.c_str(), result.error.c_str());
+        return false;
+    }
+
+    if (result.expectedRetval.has_value() && result.retval.has_value() &&
+        result.expectedRetval.value() != result.retval.value())
+    {
+        ChipLogError(AppServer, "[%s] EVerest command %s returned unexpected state %s (expected %s)", kLogModule,
+                     cmdName.c_str(), result.retval.value() ? "true" : "false",
+                     result.expectedRetval.value() ? "true" : "false");
+        return false;
+    }
+
+    return result.retval.has_value() || result.expectedRetval == std::nullopt;
+}
+
+std::string EverestMqttThread::NextCommandId()
+{
+    std::lock_guard<std::mutex> lock(mCommandMutex);
+    return mConfig.clientId + "-" + std::to_string(++mNextCommandSequence);
 }
 
 void EverestMqttThread::HandleHwCapabilitiesMessage(const std::string & payload)

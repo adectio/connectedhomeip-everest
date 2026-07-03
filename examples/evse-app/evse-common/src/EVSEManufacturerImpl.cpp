@@ -18,6 +18,7 @@
 
 #include <DEMManufacturerDelegate.h>
 #include <DeviceEnergyManagementDelegateImpl.h>
+#include <EverestMqttThread.h>
 #include <EVSEManufacturerImpl.h>
 #include <ElectricalSensorManager.h>
 #include <EnergyEvseDelegateImpl.h>
@@ -490,6 +491,10 @@ void EVSEManufacturer::ApplicationCallbackHandler(const EVSECbInfo * cb, intptr_
     {
     case EVSECallbackType::StateChanged:
         ChipLogProgress(AppServer, "EVSE callback - state changed");
+        if (EverestMqttThread * mqttThread = GetEverestMqttThread())
+        {
+            mqttThread->HandleMatterStateChange(cb->StateChange.state, cb->StateChange.supplyState);
+        }
         TEMPORARY_RETURN_IGNORED pClass->ComputeChargingSchedule();
         break;
     case EVSECallbackType::ChargeCurrentChanged:
