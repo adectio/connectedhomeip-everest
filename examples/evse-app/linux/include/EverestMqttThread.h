@@ -18,6 +18,8 @@
 
 #pragma once
 
+#include <EverestEvseManagerApiTopics.h>
+
 #include <atomic>
 #include <cstdint>
 #include <chrono>
@@ -40,10 +42,8 @@ public:
         std::string brokerHost          = "127.0.0.1";
         uint16_t brokerPort             = 1883;
         std::string clientId            = "matter-evse-linux";
-        std::string everestPrefix       = "everest";
-        std::string evseModuleId        = "connector_1";
-        std::string evseImplementationId = "evse";
-        uint32_t connectorId            = 1;
+        std::string apiModuleId         = "evse_manager_api";
+        std::string externalEnergyLimitsApiModuleId = "matter_energy_limits_api";
         std::chrono::seconds retryBackoff{ 5 };
     };
 
@@ -63,26 +63,9 @@ public:
     void RequestReconnect();
 
     ConnectionState GetConnectionState() const;
-    void HandleMatterStateChange(chip::app::Clusters::EnergyEvse::StateEnum state,
-                                 chip::app::Clusters::EnergyEvse::SupplyStateEnum supplyState);
+    void HandleMatterChargeCurrentChange(int64_t maximumChargeCurrentMilliAmps);
 
 private:
-    enum class CommandSelector
-    {
-        Unknown,
-        EnableDisableResponse,
-        ResumeChargingResponse,
-    };
-
-    struct PendingCommand
-    {
-        bool completed = false;
-        bool accepted  = false;
-        std::optional<bool> expectedRetval;
-        std::optional<bool> retval;
-        std::string error;
-    };
-
     static void HandleConnect(struct mosquitto * mosq, void * obj, int rc);
     static void HandleDisconnect(struct mosquitto * mosq, void * obj, int rc);
     static void HandleMessage(struct mosquitto * mosq, void * obj, const struct mosquitto_message * message);
@@ -92,31 +75,25 @@ private:
     void Disconnect();
     bool EnsureClient();
     bool SubscribeTopics();
-    std::string BuildCmdTopic(const std::string & cmdName) const;
-    std::string BuildCmdResponseTopic(const std::string & cmdName) const;
-    std::string BuildVarTopic(const std::string & varName) const;
-    CommandSelector SelectCommandTopic(const std::string & topic) const;
     void HandleMessage(const std::string & topic, const std::string & payload);
-    void HandleCommandResponse(CommandSelector selector, const std::string & payload);
     void HandleHwCapabilitiesMessage(const std::string & payload);
     void HandleEvInfoMessage(const std::string & payload);
     void HandlePowermeterMessage(const std::string & payload);
     void HandleLimitsMessage(const std::string & payload);
     void HandleSessionEventMessage(const std::string & payload);
-    bool SendEnableDisableCommand(bool enable);
-    bool SendResumeChargingCommand();
-    bool SendEVerestCommand(const std::string & cmdName, const std::string & responseTopic, const std::string & payload,
-                            std::optional<bool> expectedRetval = std::nullopt);
-    std::string NextCommandId();
+    void HandleSessionInfoMessage(const std::string & payload);
+    bool SendExternalCurrentLimit(int64_t maximumChargeCurrentMilliAmps);
 
     Config mConfig;
-    std::string mEnableDisableResponseTopic;
-    std::string mResumeChargingResponseTopic;
+    everest::mqtt::EvseManagerApiTopics mApiTopics;
+    everest::mqtt::ExternalEnergyLimitsApiTopics mExternalEnergyLimitsApiTopics;
+    std::string mSetExternalLimitsTopic;
     std::string mHwCapabilitiesTopic;
     std::string mEvInfoTopic;
     std::string mPowermeterTopic;
     std::string mLimitsTopic;
     std::string mSessionEventTopic;
+    std::string mSessionInfoTopic;
     std::thread mThread;
     mutable std::mutex mMutex;
     std::condition_variable mCondition;
@@ -125,6 +102,7 @@ private:
     bool mReconnectRequested                     = false;
     struct mosquitto * mMosquitto                = nullptr;
     std::optional<int64_t> mLastHardwareMaxCurrentMilliAmps;
+    std::optional<int64_t> mLastForwardedChargeCurrentMilliAmps;
     std::optional<int64_t> mLastHardwareMaxDischargeCurrentMilliAmps;
     std::optional<int64_t> mLastCircuitCapacityMilliAmps;
     std::optional<int64_t> mLastNominalMainsVoltageMilliVolts;
@@ -138,11 +116,6 @@ private:
     std::optional<std::chrono::steady_clock::time_point> mCurrentSessionStart;
     std::optional<int64_t> mSessionEnergyImportStartMilliWattHours;
     std::optional<int64_t> mSessionEnergyExportStartMilliWattHours;
-    std::optional<int> mLastForwardedSupplyState;
-    std::mutex mCommandMutex;
-    std::condition_variable mCommandCondition;
-    uint64_t mNextCommandSequence = 0;
-    std::unordered_map<std::string, PendingCommand> mPendingCommands;
 };
 
 EverestMqttThread * GetEverestMqttThread();

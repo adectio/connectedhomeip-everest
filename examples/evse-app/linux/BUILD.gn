@@ -52,6 +52,7 @@ executable("chip-evse-app") {
 
     # Application
     "EverestMqttThread.cpp",
+    "include/EverestEvseManagerApiTopics.h",
     "include/CHIPProjectAppConfig.h",
     "include/EverestMqttThread.h",
     "main.cpp",
