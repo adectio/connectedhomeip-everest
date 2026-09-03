@@ -18,6 +18,7 @@
 
 #include "EverestMqttThread.h"
 
+#include <ElectricalSensorManager.h>
 #include <EVSEManufacturerImpl.h>
 #include <json/json.h>
 #include <lib/support/logging/CHIPLogging.h>
@@ -53,6 +54,9 @@ struct MatterEvseUpdate
     std::optional<int64_t> maxHardwareDischargeCurrentLimitMilliAmps;
     std::optional<int64_t> nominalMainsVoltageMilliVolts;
     std::optional<int64_t> circuitCapacityMilliAmps;
+    std::optional<int64_t> activePowerMilliWatts;
+    std::optional<int64_t> voltageMilliVolts;
+    std::optional<int64_t> activeCurrentMilliAmps;
     std::optional<StateEnum> evseState;
     std::optional<uint8_t> stateOfChargePercent;
     bool clearStateOfCharge = false;
@@ -137,6 +141,27 @@ public:
         if (self->mUpdate.circuitCapacityMilliAmps.has_value())
         {
             delegate->HwSetCircuitCapacity(self->mUpdate.circuitCapacityMilliAmps.value());
+        }
+
+        if (self->mUpdate.activePowerMilliWatts.has_value() && self->mUpdate.voltageMilliVolts.has_value() &&
+            self->mUpdate.activeCurrentMilliAmps.has_value())
+        {
+            auto * sensorManager = manufacturer->GetESManager();
+            if (sensorManager == nullptr)
+            {
+                ChipLogError(AppServer, "[%s] Electrical sensor manager is not initialized", kLogModule);
+                chip::Platform::Delete(self);
+                return;
+            }
+
+            CHIP_ERROR err = sensorManager->SendPowerReading(
+                self->mUpdate.activePowerMilliWatts.value(), self->mUpdate.voltageMilliVolts.value(),
+                self->mUpdate.activeCurrentMilliAmps.value());
+            if (err != CHIP_NO_ERROR)
+            {
+                ChipLogError(AppServer, "[%s] Failed to update Electrical Power Measurement: %" CHIP_ERROR_FORMAT,
+                             kLogModule, err.Format());
+            }
         }
 
         if (self->mUpdate.evseState.has_value())
@@ -260,6 +285,42 @@ std::optional<int64_t> JsonCurrentToMilliAmps(const Json::Value & value)
     }
 
     return static_cast<int64_t>(std::llround(milliAmps));
+}
+
+std::optional<int64_t> JsonPowerToMilliWatts(const Json::Value & value)
+{
+    if (!value.isNumeric())
+    {
+        return std::nullopt;
+    }
+
+    const double milliWatts = value.asDouble() * 1000.0;
+    if (!std::isfinite(milliWatts) || milliWatts < static_cast<double>(std::numeric_limits<int64_t>::min()) ||
+        milliWatts > static_cast<double>(std::numeric_limits<int64_t>::max()))
+    {
+        return std::nullopt;
+    }
+
+    return static_cast<int64_t>(std::llround(milliWatts));
+}
+
+const Json::Value & AggregateOrFirstPhase(const Json::Value & values)
+{
+    if (values.isObject() && values["total"].isNumeric())
+    {
+        return values["total"];
+    }
+
+    constexpr const char * kPhaseKeys[] = { "L1", "DC", "L2", "L3" };
+    for (const char * key : kPhaseKeys)
+    {
+        if (values.isObject() && values[key].isNumeric())
+        {
+            return values[key];
+        }
+    }
+
+    return Json::Value::nullSingleton();
 }
 
 std::optional<int64_t> JsonEnergyToMilliWattHours(const Json::Value & value)
@@ -932,6 +993,16 @@ void EverestMqttThread::HandlePowermeterMessage(const std::string & payload)
     {
         mLastNominalMainsVoltageMilliVolts = nominalMainsVoltageMilliVolts;
         update.nominalMainsVoltageMilliVolts = nominalMainsVoltageMilliVolts;
+        hasChanges = true;
+    }
+
+    const auto activePowerMilliWatts = JsonPowerToMilliWatts(AggregateOrFirstPhase(data["power_W"]));
+    const auto activeCurrentMilliAmps = JsonCurrentToMilliAmps(AggregateOrFirstPhase(data["current_A"]));
+    if (activePowerMilliWatts.has_value() && nominalMainsVoltageMilliVolts.has_value() && activeCurrentMilliAmps.has_value())
+    {
+        update.activePowerMilliWatts = activePowerMilliWatts;
+        update.voltageMilliVolts = nominalMainsVoltageMilliVolts;
+        update.activeCurrentMilliAmps = activeCurrentMilliAmps;
         hasChanges = true;
     }
 
