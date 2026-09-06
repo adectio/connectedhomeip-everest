@@ -26,13 +26,12 @@
 #include <platform/PlatformManager.h>
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstdint>
-#include <ctime>
 #include <limits>
 #include <sstream>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_map>
 #include <utility>
 
@@ -47,6 +46,7 @@ constexpr int kKeepAliveSeconds         = 60;
 constexpr int kLoopTimeoutMs            = 1000;
 constexpr int kReconnectDelaySeconds    = 1;
 constexpr int kReconnectDelayMaxSeconds = 5;
+constexpr std::chrono::seconds kCommandTimeout{ 5 };
 
 struct MatterEvseUpdate
 {
@@ -248,26 +248,37 @@ bool ParseEVerestApiPayload(const std::string & payload, Json::Value & data)
     return true;
 }
 
+bool ParseEVerestApiCommandResult(const std::string & payload, std::optional<bool> & retval, std::string & error)
+{
+    Json::CharReaderBuilder builder;
+    builder["collectComments"] = false;
+
+    Json::Value data;
+    std::string parseErrors;
+    std::istringstream stream(payload);
+    if (!Json::parseFromStream(builder, stream, &data, &parseErrors))
+    {
+        error = parseErrors;
+        return false;
+    }
+
+    if (!data.isBool())
+    {
+        error = "Command response is not a boolean";
+        return false;
+    }
+
+    retval = data.asBool();
+    error.clear();
+    return true;
+}
+
 std::string JsonToString(const Json::Value & value)
 {
     Json::StreamWriterBuilder builder;
     builder["commentStyle"] = "None";
     builder["indentation"] = "";
     return Json::writeString(builder, value);
-}
-
-std::string CurrentTimestamp()
-{
-    const std::time_t now = std::time(nullptr);
-    std::tm utcTime;
-    if (gmtime_r(&now, &utcTime) == nullptr)
-    {
-        return {};
-    }
-
-    std::array<char, 21> timestamp;
-    const size_t length = std::strftime(timestamp.data(), timestamp.size(), "%Y-%m-%dT%H:%M:%SZ", &utcTime);
-    return std::string(timestamp.data(), length);
 }
 
 std::optional<int64_t> JsonCurrentToMilliAmps(const Json::Value & value)
@@ -492,9 +503,8 @@ std::optional<StateEnum> ParseSessionInfoState(std::string_view state)
 EverestMqttThread::EverestMqttThread(Config config) :
     mConfig(std::move(config)),
     mApiTopics(mConfig.apiModuleId, mConfig.clientId),
-    mExternalEnergyLimitsApiTopics(mConfig.externalEnergyLimitsApiModuleId),
-    mSetExternalLimitsTopic(
-        mExternalEnergyLimitsApiTopics.Command(everest::mqtt::ExternalEnergyLimitsApiTopics::kSetExternalLimitsCommand)),
+    mPauseChargingResponseTopic(mApiTopics.CommandReply(everest::mqtt::EvseManagerApiTopics::kPauseChargingCommand)),
+    mResumeChargingResponseTopic(mApiTopics.CommandReply(everest::mqtt::EvseManagerApiTopics::kResumeChargingCommand)),
     mHwCapabilitiesTopic(mApiTopics.Variable(everest::mqtt::EvseManagerApiTopics::kHwCapabilitiesVariable)),
     mEvInfoTopic(mApiTopics.Variable(everest::mqtt::EvseManagerApiTopics::kEvInfoVariable)),
     mPowermeterTopic(mApiTopics.Variable(everest::mqtt::EvseManagerApiTopics::kPowermeterVariable)),
@@ -555,23 +565,39 @@ EverestMqttThread::ConnectionState EverestMqttThread::GetConnectionState() const
     return mConnectionState.load();
 }
 
-void EverestMqttThread::HandleMatterChargeCurrentChange(int64_t maximumChargeCurrentMilliAmps)
+void EverestMqttThread::HandleMatterStateChange(chip::app::Clusters::EnergyEvse::StateEnum state,
+                                                chip::app::Clusters::EnergyEvse::SupplyStateEnum supplyState)
 {
-    if (maximumChargeCurrentMilliAmps < 0)
-    {
-        ChipLogError(AppServer, "[%s] Ignoring negative Matter charge current limit %ld mA", kLogModule,
-                     static_cast<long>(maximumChargeCurrentMilliAmps));
-        return;
-    }
+    static_cast<void>(state);
 
-    if (mLastForwardedChargeCurrentMilliAmps == maximumChargeCurrentMilliAmps)
+    if (mLastForwardedSupplyState == static_cast<int>(supplyState))
     {
         return;
     }
 
-    if (SendExternalCurrentLimit(maximumChargeCurrentMilliAmps))
+    bool success = false;
+    switch (supplyState)
     {
-        mLastForwardedChargeCurrentMilliAmps = maximumChargeCurrentMilliAmps;
+    case chip::app::Clusters::EnergyEvse::SupplyStateEnum::kDisabled:
+    case chip::app::Clusters::EnergyEvse::SupplyStateEnum::kDisabledError:
+    case chip::app::Clusters::EnergyEvse::SupplyStateEnum::kDisabledDiagnostics:
+        success = SendPauseChargingCommand();
+        break;
+    case chip::app::Clusters::EnergyEvse::SupplyStateEnum::kChargingEnabled:
+    case chip::app::Clusters::EnergyEvse::SupplyStateEnum::kDischargingEnabled:
+    case chip::app::Clusters::EnergyEvse::SupplyStateEnum::kEnabled:
+        success = SendResumeChargingCommand();
+        break;
+    case chip::app::Clusters::EnergyEvse::SupplyStateEnum::kUnknownEnumValue:
+    default:
+        ChipLogError(AppServer, "[%s] Unsupported Matter supply state %d for EVerest command forwarding", kLogModule,
+                     static_cast<int>(supplyState));
+        return;
+    }
+
+    if (success)
+    {
+        mLastForwardedSupplyState = static_cast<int>(supplyState);
     }
 }
 
@@ -762,9 +788,20 @@ bool EverestMqttThread::SubscribeTopics()
         return false;
     }
 
+    const char * const commandResponseTopics[] = { mPauseChargingResponseTopic.c_str(), mResumeChargingResponseTopic.c_str() };
     const char * const variableTopics[] = { mHwCapabilitiesTopic.c_str(), mEvInfoTopic.c_str(), mPowermeterTopic.c_str(),
                                             mLimitsTopic.c_str(), mSessionEventTopic.c_str(), mSessionInfoTopic.c_str() };
 
+    for (const char * topic : commandResponseTopics)
+    {
+        const int rc = mosquitto_subscribe(mMosquitto, nullptr, topic, 2);
+        if (rc != MOSQ_ERR_SUCCESS)
+        {
+            ChipLogError(AppServer, "[%s] Failed to subscribe to %s rc=%d", kLogModule, topic, rc);
+            return false;
+        }
+        ChipLogProgress(AppServer, "[%s] Subscribed to %s", kLogModule, topic);
+    }
     for (const char * topic : variableTopics)
     {
         const int rc = mosquitto_subscribe(mMosquitto, nullptr, topic, 2);
@@ -779,76 +816,163 @@ bool EverestMqttThread::SubscribeTopics()
     return true;
 }
 
+EverestMqttThread::CommandSelector EverestMqttThread::SelectCommandTopic(const std::string & topic) const
+{
+    if (topic == mPauseChargingResponseTopic)
+    {
+        return CommandSelector::PauseChargingResponse;
+    }
+    if (topic == mResumeChargingResponseTopic)
+    {
+        return CommandSelector::ResumeChargingResponse;
+    }
+    return CommandSelector::Unknown;
+}
+
 void EverestMqttThread::HandleMessage(const std::string & topic, const std::string & payload)
 {
-    switch (ParseTopicSelector(topic))
+    switch (SelectCommandTopic(topic))
     {
-    case TopicSelector::kHwCapabilities:
-        HandleHwCapabilitiesMessage(payload);
+    case CommandSelector::PauseChargingResponse:
+    case CommandSelector::ResumeChargingResponse:
+        HandleCommandResponse(topic, payload);
         break;
-    case TopicSelector::kEvInfo:
-        HandleEvInfoMessage(payload);
+    case CommandSelector::Unknown:
+        switch (ParseTopicSelector(topic))
+        {
+        case TopicSelector::kHwCapabilities:
+            HandleHwCapabilitiesMessage(payload);
+            break;
+        case TopicSelector::kEvInfo:
+            HandleEvInfoMessage(payload);
+            break;
+        case TopicSelector::kPowermeter:
+            HandlePowermeterMessage(payload);
+            break;
+        case TopicSelector::kLimits:
+            HandleLimitsMessage(payload);
+            break;
+        case TopicSelector::kSessionEvent:
+            HandleSessionEventMessage(payload);
+            break;
+        case TopicSelector::kSessionInfo:
+            HandleSessionInfoMessage(payload);
+            break;
+        case TopicSelector::kUnknown:
+        default:
+            ChipLogError(AppServer, "[%s] Received message on unexpected stable API topic %s", kLogModule, topic.c_str());
+            break;
+        }
         break;
-    case TopicSelector::kPowermeter:
-        HandlePowermeterMessage(payload);
-        break;
-    case TopicSelector::kLimits:
-        HandleLimitsMessage(payload);
-        break;
-    case TopicSelector::kSessionEvent:
-        HandleSessionEventMessage(payload);
-        break;
-    case TopicSelector::kSessionInfo:
-        HandleSessionInfoMessage(payload);
-        break;
-    case TopicSelector::kUnknown:
     default:
-        ChipLogError(AppServer, "[%s] Received message on unexpected stable API topic %s", kLogModule, topic.c_str());
         break;
     }
 }
 
-bool EverestMqttThread::SendExternalCurrentLimit(int64_t maximumChargeCurrentMilliAmps)
+void EverestMqttThread::HandleCommandResponse(const std::string & responseTopic, const std::string & payload)
+{
+    std::string error;
+    std::optional<bool> retval;
+    if (!ParseEVerestApiCommandResult(payload, retval, error))
+    {
+        ChipLogError(AppServer, "[%s] Failed to parse EVerest API command response: %s", kLogModule, error.c_str());
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(mCommandMutex);
+        const auto it = mPendingCommands.find(responseTopic);
+        if (it == mPendingCommands.end())
+        {
+            return;
+        }
+
+        it->second.completed = true;
+        it->second.retval = retval;
+        it->second.error = error;
+    }
+
+    mCommandCondition.notify_all();
+}
+
+bool EverestMqttThread::SendPauseChargingCommand()
+{
+    return SendEVerestCommand(everest::mqtt::EvseManagerApiTopics::kPauseChargingCommand, mPauseChargingResponseTopic, true);
+}
+
+bool EverestMqttThread::SendResumeChargingCommand()
+{
+    return SendEVerestCommand(everest::mqtt::EvseManagerApiTopics::kResumeChargingCommand, mResumeChargingResponseTopic, true);
+}
+
+bool EverestMqttThread::SendEVerestCommand(const std::string & cmdName, const std::string & responseTopic,
+                                           std::optional<bool> expectedRetval)
 {
     if (mMosquitto == nullptr)
     {
-        ChipLogError(AppServer, "[%s] Cannot publish an external current limit while MQTT is disconnected", kLogModule);
+        ChipLogError(AppServer, "[%s] Cannot send EVerest command %s while MQTT is disconnected", kLogModule, cmdName.c_str());
         return false;
     }
 
-    const std::string timestamp = CurrentTimestamp();
-    if (timestamp.empty())
+    Json::Value payload(Json::objectValue);
+    payload["headers"]["replyTo"] = responseTopic;
+    payload["payload"] = Json::Value(Json::objectValue);
+
+    const std::string payloadString = JsonToString(payload);
     {
-        ChipLogError(AppServer, "[%s] Unable to create a timestamp for the external current limit", kLogModule);
-        return false;
+        std::lock_guard<std::mutex> lock(mCommandMutex);
+        PendingCommand pending;
+        pending.expectedRetval = expectedRetval;
+        if (!mPendingCommands.emplace(responseTopic, std::move(pending)).second)
+        {
+            ChipLogError(AppServer, "[%s] EVerest API command %s is already pending", kLogModule, cmdName.c_str());
+            return false;
+        }
     }
 
-    const double maximumChargeCurrentAmps = static_cast<double>(maximumChargeCurrentMilliAmps) / 1000.0;
-    const auto scheduleEntry = [&timestamp](double maximumCurrentAmps) {
-        Json::Value entry(Json::objectValue);
-        entry["timestamp"] = timestamp;
-        entry["limits_to_leaves"]["ac_max_current_A"]["value"]  = maximumCurrentAmps;
-        entry["limits_to_leaves"]["ac_max_current_A"]["source"] = "matter-evse";
-        return entry;
-    };
-
-    Json::Value externalLimits(Json::objectValue);
-    externalLimits["schedule_import"].append(scheduleEntry(maximumChargeCurrentAmps));
-    externalLimits["schedule_export"].append(scheduleEntry(0));
-    externalLimits["schedule_setpoints"] = Json::Value(Json::arrayValue);
-
-    const std::string payload = JsonToString(externalLimits);
-    const int rc = mosquitto_publish(mMosquitto, nullptr, mSetExternalLimitsTopic.c_str(), static_cast<int>(payload.size()),
-                                     payload.data(), 1, false);
+    const std::string commandTopic = mApiTopics.Command(cmdName.c_str());
+    const int rc = mosquitto_publish(mMosquitto, nullptr, commandTopic.c_str(), static_cast<int>(payloadString.size()),
+                                     payloadString.data(), 2, false);
     if (rc != MOSQ_ERR_SUCCESS)
     {
-        ChipLogError(AppServer, "[%s] Failed to publish external current limit rc=%d", kLogModule, rc);
+        std::lock_guard<std::mutex> lock(mCommandMutex);
+        mPendingCommands.erase(responseTopic);
+        ChipLogError(AppServer, "[%s] Failed to publish EVerest API command %s rc=%d", kLogModule, cmdName.c_str(), rc);
         return false;
     }
 
-    ChipLogProgress(AppServer, "[%s] Published Matter charge current limit %ld mA to %s", kLogModule,
-                    static_cast<long>(maximumChargeCurrentMilliAmps), mSetExternalLimitsTopic.c_str());
-    return true;
+    std::unique_lock<std::mutex> lock(mCommandMutex);
+    const bool completed = mCommandCondition.wait_for(lock, kCommandTimeout, [this, &responseTopic] {
+        const auto it = mPendingCommands.find(responseTopic);
+        return it != mPendingCommands.end() && it->second.completed;
+    });
+
+    if (!completed)
+    {
+        mPendingCommands.erase(responseTopic);
+        ChipLogError(AppServer, "[%s] Timeout waiting for EVerest API response to %s on %s", kLogModule, cmdName.c_str(),
+                     responseTopic.c_str());
+        return false;
+    }
+
+    const PendingCommand result = mPendingCommands.at(responseTopic);
+    mPendingCommands.erase(responseTopic);
+    if (!result.error.empty())
+    {
+        ChipLogError(AppServer, "[%s] EVerest API command %s failed: %s", kLogModule, cmdName.c_str(), result.error.c_str());
+        return false;
+    }
+
+    if (result.expectedRetval.has_value() && result.retval.has_value() &&
+        result.expectedRetval.value() != result.retval.value())
+    {
+        ChipLogError(AppServer, "[%s] EVerest API command %s returned unexpected state %s (expected %s)", kLogModule,
+                     cmdName.c_str(), result.retval.value() ? "true" : "false",
+                     result.expectedRetval.value() ? "true" : "false");
+        return false;
+    }
+
+    return result.retval.has_value() || result.expectedRetval == std::nullopt;
 }
 
 void EverestMqttThread::HandleHwCapabilitiesMessage(const std::string & payload)
