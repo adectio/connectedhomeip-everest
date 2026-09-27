@@ -601,6 +601,27 @@ void EverestMqttThread::HandleMatterStateChange(chip::app::Clusters::EnergyEvse:
     }
 }
 
+void EverestMqttThread::SynchronizeMatterSupplyState(intptr_t context)
+{
+    auto * self = reinterpret_cast<EverestMqttThread *>(context);
+    VerifyOrReturn(self != nullptr);
+
+    if (self->GetConnectionState() != ConnectionState::Connected)
+    {
+        return;
+    }
+
+    auto * manufacturer = chip::app::Clusters::EnergyEvse::GetEvseManufacturer();
+    if (manufacturer == nullptr || manufacturer->GetEvseInstance() == nullptr)
+    {
+        ChipLogError(AppServer, "[%s] EVSE manufacturer or instance is not initialized", kLogModule);
+        return;
+    }
+
+    auto * instance = manufacturer->GetEvseInstance();
+    self->HandleMatterStateChange(instance->GetState(), instance->GetSupplyState());
+}
+
 void EverestMqttThread::HandleConnect(struct mosquitto * mosq, void * obj, int rc)
 {
     static_cast<void>(mosq);
@@ -625,6 +646,8 @@ void EverestMqttThread::HandleDisconnect(struct mosquitto * mosq, void * obj, in
     static_cast<void>(mosq);
     auto * self = static_cast<EverestMqttThread *>(obj);
     VerifyOrReturn(self != nullptr);
+
+    self->mLastForwardedSupplyState.reset();
 
     if (rc == MOSQ_ERR_SUCCESS)
     {
@@ -688,6 +711,14 @@ void EverestMqttThread::ThreadMain()
         }
 
         mConnectionState = ConnectionState::Connected;
+        mLastForwardedSupplyState.reset();
+        CHIP_ERROR err = PlatformMgr().ScheduleWork(&EverestMqttThread::SynchronizeMatterSupplyState,
+                                                    reinterpret_cast<intptr_t>(this));
+        if (err != CHIP_NO_ERROR)
+        {
+            ChipLogError(AppServer, "[%s] Failed to schedule Matter supply-state synchronization: %" CHIP_ERROR_FORMAT,
+                         kLogModule, err.Format());
+        }
 
         while (!mShouldStop && !mReconnectRequested)
         {

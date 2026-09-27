@@ -84,6 +84,7 @@ private:
     static void HandleConnect(struct mosquitto * mosq, void * obj, int rc);
     static void HandleDisconnect(struct mosquitto * mosq, void * obj, int rc);
     static void HandleMessage(struct mosquitto * mosq, void * obj, const struct mosquitto_message * message);
+    static void SynchronizeMatterSupplyState(intptr_t context);
 
     void ThreadMain();
     bool Connect();

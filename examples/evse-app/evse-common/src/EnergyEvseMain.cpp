@@ -119,6 +119,10 @@ CHIP_ERROR EnergyEvseInit(chip::EndpointId endpointId)
         return CHIP_ERROR_NO_MEMORY;
     }
 
+    // Init restores persisted attributes and notifies the delegate, so it must
+    // be linked to the instance first.
+    gEvseDelegate->SetInstance(gEvseInstance.get());
+
     err = gEvseInstance->Init();
     if (err != CHIP_NO_ERROR)
     {
@@ -128,9 +132,6 @@ CHIP_ERROR EnergyEvseInit(chip::EndpointId endpointId)
         gEvseDelegate.reset();
         return err;
     }
-
-    // Link the delegate to the instance for attribute access
-    gEvseDelegate->SetInstance(gEvseInstance.get());
 
     err = gEvseTargetsDelegate->LoadTargets();
     if (err != CHIP_NO_ERROR)
