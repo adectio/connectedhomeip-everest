@@ -36,8 +36,29 @@ public:
     static constexpr const char kSessionInfoVariable[]    = "session_info";
 
     EvseManagerApiTopics(const std::string & apiModuleId, const std::string & clientId) :
-        mApiBase("everest_api/1/evse_manager_consumer/" + apiModuleId),
-        mClientId(clientId)
+        mApiBase("everest_api/1/evse_manager_consumer/" + apiModuleId), mClientId(clientId)
+    {}
+
+    std::string Command(const char * command) const { return mApiBase + "/m2e/" + command; }
+
+    std::string CommandReply(const char * command) const { return mApiBase + "/m2e/reply/" + mClientId + "/" + command; }
+
+    std::string Variable(const char * variable) const { return mApiBase + "/e2m/" + variable; }
+
+private:
+    std::string mApiBase;
+    std::string mClientId;
+};
+
+class ErrorHistoryConsumerApiTopics
+{
+public:
+    static constexpr const char kActiveErrorsCommand[]  = "active_errors";
+    static constexpr const char kErrorRaisedVariable[]  = "error_raised";
+    static constexpr const char kErrorClearedVariable[] = "error_cleared";
+
+    ErrorHistoryConsumerApiTopics(const std::string & apiModuleId, const std::string & clientId) :
+        mApiBase("everest_api/1/error_history_consumer/" + apiModuleId), mClientId(clientId)
     {}
 
     std::string Command(const char * command) const { return mApiBase + "/m2e/" + command; }

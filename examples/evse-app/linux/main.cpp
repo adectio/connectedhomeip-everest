@@ -17,9 +17,9 @@
  */
 
 #include <AppMain.h>
-#include <EverestMqttThread.h>
 #include <EnergyEvseMain.h>
 #include <EnergyManagementAppCmdLineOptions.h>
+#include <EverestMqttThread.h>
 #include <Identify.h>
 #include <app-common/zap-generated/cluster-objects.h>
 #include <lib/support/BitMask.h>
@@ -39,12 +39,15 @@ static uint32_t ParseNumber(const char * pString);
 static bool EnergyAppOptionHandler(const char * aProgram, chip::ArgParser::OptionSet * aOptions, int aIdentifier,
                                    const char * aName, const char * aValue);
 
-constexpr uint16_t kOptionFeatureMap = 0xffd1;
+constexpr uint16_t kOptionFeatureMap           = 0xffd1;
+constexpr uint16_t kOptionErrorHistoryModuleId = 0xffd2;
+constexpr uint16_t kOptionErrorOriginModuleId  = 0xffd3;
 
 constexpr chip::EndpointId kEvseEndpoint = 1;
 
 namespace {
 std::unique_ptr<EverestMqttThread> gEverestMqttThread;
+EverestMqttThread::Config gEverestMqttConfig;
 } // namespace
 
 EverestMqttThread * GetEverestMqttThread()
@@ -55,13 +58,18 @@ EverestMqttThread * GetEverestMqttThread()
 // Define the chip::ArgParser command line structures for extending the command line to support the
 // energy apps
 static chip::ArgParser::OptionDef sEnergyAppOptionDefs[] = {
-    { "featureSet", chip::ArgParser::kArgumentRequired, kOptionFeatureMap }, { nullptr }
+    { "featureSet", chip::ArgParser::kArgumentRequired, kOptionFeatureMap },
+    { "everest-error-history-module-id", chip::ArgParser::kArgumentRequired, kOptionErrorHistoryModuleId },
+    { "everest-error-origin-module-id", chip::ArgParser::kArgumentRequired, kOptionErrorOriginModuleId },
+    { nullptr }
 };
 
 static chip::ArgParser::OptionSet sCmdLineOptions = { EnergyAppOptionHandler, // handler function
                                                       sEnergyAppOptionDefs,   // array of option definitions
                                                       "PROGRAM OPTIONS",      // help group
-                                                      "-f, --featureSet <value>\n" };
+                                                      "-f, --featureSet <value>\n"
+                                                      "    --everest-error-history-module-id <module-id>\n"
+                                                      "    --everest-error-origin-module-id <module-id>\n" };
 
 namespace chip {
 namespace app {
@@ -108,7 +116,7 @@ void ApplicationInit()
     ChipLogDetail(AppServer, "EVSE App: ApplicationInit()");
     SuccessOrDie(IdentifyInit());
     EvseApplicationInit();
-    gEverestMqttThread = std::make_unique<EverestMqttThread>(EverestMqttThread::Config{});
+    gEverestMqttThread = std::make_unique<EverestMqttThread>(gEverestMqttConfig);
     gEverestMqttThread->Start();
 }
 
@@ -133,6 +141,12 @@ static bool EnergyAppOptionHandler(const char * aProgram, chip::ArgParser::Optio
     case kOptionFeatureMap:
         sFeatureMap = BitMask<chip::app::Clusters::DeviceEnergyManagement::Feature>(ParseNumber(aValue));
         ChipLogDetail(Support, "Using FeatureMap 0x%04x", sFeatureMap.Raw());
+        break;
+    case kOptionErrorHistoryModuleId:
+        gEverestMqttConfig.errorHistoryModuleId = aValue;
+        break;
+    case kOptionErrorOriginModuleId:
+        gEverestMqttConfig.errorOriginModuleId = aValue;
         break;
     default:
         ChipLogError(Support, "%s: INTERNAL ERROR: Unhandled option: %s\n", aProgram, aName);

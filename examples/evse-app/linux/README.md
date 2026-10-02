@@ -84,6 +84,78 @@ details.
     See the test-runner headers in the respective test script in
     src/python_testing/TC_DEM_2.x.py which have recommended values to use.
 
+-   `--everest-error-history-module-id <module-id>`
+
+    Sets the EVerest `error_history_consumer_API` module that supplies active,
+    raised, and cleared errors. The default is `error_history_1`.
+
+-   `--everest-error-origin-module-id <module-id>`
+
+    Selects the EVSE board module whose errors drive the Matter Energy EVSE
+    `FaultState`. Errors from other EVerest modules are ignored. The default is
+    `bsp_1`.
+
+## EVerest Fault Bridge
+
+The bridge requests the configured Error History Consumer's active errors at
+startup, then subscribes to its raised and cleared notifications. It retains
+the active errors by UUID and reports the highest-priority mapped error through
+the Matter Energy EVSE `FaultState` attribute and `Fault` event. Vendor warnings
+do not produce a Matter fault.
+
+The Error History Consumer and the EVSE Board Support API module must be
+present in the EVerest configuration. For a development setup with the default
+bridge arguments, configure module IDs `error_history_1` and `bsp_1`, and
+route the connector's `bsp` connection to `bsp_1`:
+
+```yaml
+active_modules:
+  error_history_1:
+    module: error_history_consumer_API
+    connections:
+      error_history:
+        - module_id: error_history
+          implementation_id: error_history
+  bsp_1:
+    module: evse_board_support_API
+    mapping:
+      module:
+        evse: 1
+    config_module:
+      cfg_communication_check_to_s: 0
+  connector_1:
+    connections:
+      bsp:
+        - module_id: bsp_1
+          implementation_id: main
+```
+
+Use the command-line options above when deployment module IDs differ.
+
+### Simulating faults
+
+With EVerest's MQTT broker running locally, use the stable EVSE Board Support
+API to raise an error:
+
+```sh
+mosquitto_pub -h 127.0.0.1 -p 1883 \
+  -t everest_api/1/evse_board_support/bsp_1/m2e/raise_error \
+  -m '{"type":"MREC2GroundFailure","sub_type":"matter-test","message":"ground-fault simulation"}'
+```
+
+Clear it with the same error type and subtype:
+
+```sh
+mosquitto_pub -h 127.0.0.1 -p 1883 \
+  -t everest_api/1/evse_board_support/bsp_1/m2e/clear_error \
+  -m '{"type":"MREC2GroundFailure","sub_type":"matter-test","message":"ground-fault simulation"}'
+```
+
+For example, `MREC2GroundFailure` maps to `GroundFault`,
+`MREC4OverCurrentFailure` to `OverCurrent`, and
+`MREC3HighTemperature` to `OverTemperature`. A `VendorWarning` is intentionally
+ignored; unknown stopping errors map to `Other`.
+
 ## Running the Complete Example on Raspberry Pi 4
 
 > If you want to test Echo protocol, please enable Echo handler
