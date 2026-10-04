@@ -27,6 +27,8 @@ using namespace chip::app::Clusters::EnergyEvse;
 
 namespace {
 
+constexpr int64_t kDefaultUserMaximumChargeCurrentMilliAmps = 63000;
+
 bool IsEnabledAtStartup(const chip::app::DataModel::Nullable<uint32_t> & enabledUntil)
 {
     if (enabledUntil.IsNull())
@@ -128,6 +130,12 @@ CHIP_ERROR EnergyEvseManager::LoadPersistentAttributes()
     {
         ChipLogDetail(AppServer, "EVSE: successfully loaded UserMaximumChargeCurrent from NVM");
         TEMPORARY_RETURN_IGNORED SetUserMaximumChargeCurrent(tempUserMaximumChargeCurrent);
+    }
+    else if (err == CHIP_ERROR_PERSISTED_STORAGE_VALUE_NOT_FOUND)
+    {
+        ReturnErrorOnFailure(SetUserMaximumChargeCurrent(kDefaultUserMaximumChargeCurrentMilliAmps));
+        ChipLogProgress(AppServer, "EVSE: defaulting UserMaximumChargeCurrent to %ld mA",
+                        static_cast<long>(kDefaultUserMaximumChargeCurrentMilliAmps));
     }
     else
     {
