@@ -559,9 +559,43 @@ Status EnergyEvseDelegate::HwSetCircuitCapacity(int64_t currentmA)
 
     VerifyOrReturnValue(mInstance != nullptr, Status::Failure);
 
-    TEMPORARY_RETURN_IGNORED mInstance->SetCircuitCapacity(currentmA);
+    CHIP_ERROR err = mInstance->SetCircuitCapacity(currentmA);
+    if (err != CHIP_NO_ERROR)
+    {
+        ChipLogError(AppServer, "Failed to set CircuitCapacity: %" CHIP_ERROR_FORMAT, err.Format());
+        return Status::Failure;
+    }
+
+    mCircuitCapacityInitialized = true;
+    if (mUserMaximumChargeCurrentNeedsInitialization)
+    {
+        err = InitializeUserMaximumChargeCurrent();
+        if (err != CHIP_NO_ERROR)
+        {
+            ChipLogError(AppServer, "Failed to initialize UserMaximumChargeCurrent: %" CHIP_ERROR_FORMAT, err.Format());
+            return Status::Failure;
+        }
+    }
 
     return ComputeMaxChargeCurrentLimit();
+}
+
+CHIP_ERROR EnergyEvseDelegate::InitializeUserMaximumChargeCurrent()
+{
+    VerifyOrReturnError(mInstance != nullptr, CHIP_ERROR_INCORRECT_STATE);
+
+    mUserMaximumChargeCurrentNeedsInitialization = true;
+    if (!mCircuitCapacityInitialized)
+    {
+        return CHIP_NO_ERROR;
+    }
+
+    const int64_t circuitCapacity                = mInstance->GetCircuitCapacity();
+    ChipLogProgress(AppServer, "EVSE: defaulting UserMaximumChargeCurrent to CircuitCapacity %ld mA",
+                    static_cast<long>(circuitCapacity));
+    ReturnErrorOnFailure(mInstance->SetUserMaximumChargeCurrent(circuitCapacity));
+    mUserMaximumChargeCurrentNeedsInitialization = false;
+    return CHIP_NO_ERROR;
 }
 
 /**

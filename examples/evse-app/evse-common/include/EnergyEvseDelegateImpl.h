@@ -222,6 +222,7 @@ public:
     Status HwSetNominalMainsVoltage(int64_t voltage_mV);
     int64_t HwGetNominalMainsVoltage() { return mNominalMainsVoltage; }
     Status HwSetCircuitCapacity(int64_t currentmA);
+    CHIP_ERROR InitializeUserMaximumChargeCurrent();
     Status HwSetCableAssemblyLimit(int64_t currentmA);
     int64_t HwGetCableAssemblyLimit() { return mCableAssemblyCurrentLimit; }
     Status HwSetState(StateEnum state);
@@ -311,6 +312,8 @@ private:
     int64_t mMaximumDischargingCurrentLimitFromCommand = 0; /* Value of current maximum limit when discharging enabled */
     int64_t mActualDischargingCurrentLimit             = 0;
     int64_t mNominalMainsVoltage                       = 230000; /* Assume a sensible default mains voltage (mV) */
+    bool mCircuitCapacityInitialized                   = false;
+    bool mUserMaximumChargeCurrentNeedsInitialization  = false;
 
     StateEnum mHwState = StateEnum::kNotPluggedIn; /* Hardware state */
 
