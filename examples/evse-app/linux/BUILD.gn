@@ -63,14 +63,15 @@ executable("chip-evse-app") {
 
     # Application
     "EverestMqttThread.cpp",
-    "include/EverestFaultMapping.h",
-    "include/EverestEvseManagerApiTopics.h",
     "include/CHIPProjectAppConfig.h",
+    "include/EverestEvseManagerApiTopics.h",
+    "include/EverestFaultMapping.h",
     "include/EverestMqttThread.h",
     "main.cpp",
   ]
 
   deps = [
+    ":everest-fault-mapping",
     "${chip_root}/examples/energy-management/energy-management-triggers:tests-event-triggers",
     "${chip_root}/examples/evse-app/evse-common",
     "${chip_root}/examples/evse-app/evse-common:evse-common-lib",
@@ -78,7 +79,6 @@ executable("chip-evse-app") {
     "${chip_root}/src/app:attribute-persistence",
     "${chip_root}/src/lib",
     "${chip_root}/third_party/jsoncpp",
-    ":everest-fault-mapping",
   ]
 
   include_dirs = [
