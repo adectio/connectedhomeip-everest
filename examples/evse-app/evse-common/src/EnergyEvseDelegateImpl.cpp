@@ -1201,20 +1201,13 @@ Status EnergyEvseDelegate::HandleDisabledEvent()
 /**
  * @brief This handles the new fault
  *
- * Note that if multiple faults happen and this is called repeatedly
- * We only save the previous State and SupplyState if its the first raising
- * of the fault, so we can restore the state back once all faults have cleared
+ * Note that if multiple faults happen and this is called repeatedly, we only
+ * save the previous SupplyState for the first fault. State is restored from
+ * the current hardware state because it may change while a fault is active.
 )*/
 Status EnergyEvseDelegate::HandleFaultRaised()
 {
     VerifyOrReturnValue(mInstance != nullptr, Status::Failure);
-
-    /* Save the current State and SupplyState so we can restore them if the fault clears */
-    if (mStateBeforeFault == StateEnum::kUnknownEnumValue)
-    {
-        /* No existing fault - save this value to restore it later if it clears */
-        mStateBeforeFault = GetState();
-    }
 
     if (mSupplyStateBeforeFault == SupplyStateEnum::kUnknownEnumValue)
     {
@@ -1230,8 +1223,7 @@ Status EnergyEvseDelegate::HandleFaultRaised()
 }
 Status EnergyEvseDelegate::HandleFaultCleared()
 {
-    /* Check that something strange hasn't happened */
-    if ((mStateBeforeFault == StateEnum::kUnknownEnumValue) || (mSupplyStateBeforeFault == SupplyStateEnum::kUnknownEnumValue))
+    if (mSupplyStateBeforeFault == SupplyStateEnum::kUnknownEnumValue)
     {
         ChipLogError(AppServer, "EVSE: Something wrong trying to clear fault");
         return Status::Failure;
@@ -1239,14 +1231,11 @@ Status EnergyEvseDelegate::HandleFaultCleared()
 
     VerifyOrReturnValue(mInstance != nullptr, Status::Failure);
 
-    /* Restore the State and SupplyState back to old values once all the faults have cleared
-     * Changing the State should notify the application, so it can continue charging etc
-     */
-    TEMPORARY_RETURN_IGNORED mInstance->SetState(mStateBeforeFault);
+    // EVerest may have updated the hardware state while the Matter fault was active.
+    TEMPORARY_RETURN_IGNORED mInstance->SetState(mHwState);
     TEMPORARY_RETURN_IGNORED mInstance->SetSupplyState(mSupplyStateBeforeFault);
 
-    /* put back the sentinel to catch new faults if more are raised */
-    mStateBeforeFault       = StateEnum::kUnknownEnumValue;
+    /* Put back the sentinel to catch new faults if more are raised. */
     mSupplyStateBeforeFault = SupplyStateEnum::kUnknownEnumValue;
 
     return Status::Success;

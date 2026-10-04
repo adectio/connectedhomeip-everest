@@ -318,7 +318,6 @@ private:
     StateEnum mHwState = StateEnum::kNotPluggedIn; /* Hardware state */
 
     /* Variables to hold State and SupplyState in case a fault is raised */
-    StateEnum mStateBeforeFault             = StateEnum::kUnknownEnumValue;
     SupplyStateEnum mSupplyStateBeforeFault = SupplyStateEnum::kUnknownEnumValue;
 
     /* Callback related */
