@@ -719,6 +719,13 @@ TEST_F(TestEnergyEvseCluster, TestProgrammaticSetAttributes)
     EXPECT_EQ(dirtyList[0].mAttributeId, FaultState::Id);
     EXPECT_EQ(cluster.GetFaultState(), FaultStateEnum::kGroundFault);
 
+    // kOther is a valid sparse enum value (0xFF).
+    dirtyList.clear();
+    EXPECT_EQ(cluster.SetFaultState(FaultStateEnum::kOther), CHIP_NO_ERROR);
+    EXPECT_EQ(dirtyList.size(), 1u);
+    EXPECT_EQ(dirtyList[0].mAttributeId, FaultState::Id);
+    EXPECT_EQ(cluster.GetFaultState(), FaultStateEnum::kOther);
+
     // --- Test SetCircuitCapacity (read-only attribute) ---
     dirtyList.clear();
     EXPECT_EQ(cluster.SetCircuitCapacity(48000), CHIP_NO_ERROR);

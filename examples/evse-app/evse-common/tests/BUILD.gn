@@ -18,7 +18,10 @@ import("//build_overrides/chip.gni")
 import("${chip_root}/build/chip/chip_test_suite.gni")
 
 config("tests_config") {
-  include_dirs = [ "${chip_root}/examples/evse-app/evse-common/include" ]
+  include_dirs = [
+    "${chip_root}/examples/evse-app/evse-common/include",
+    "${chip_root}/examples/evse-app/linux/include",
+  ]
 }
 
 chip_test_suite("tests") {
@@ -26,12 +29,16 @@ chip_test_suite("tests") {
 
   public_configs = [ ":tests_config" ]
 
-  test_sources = [ "TestEvseTargetsStorage.cpp" ]
+  test_sources = [
+    "TestEverestFaultMapping.cpp",
+    "TestEvseTargetsStorage.cpp",
+  ]
 
   cflags = [ "-Wconversion" ]
 
   public_deps = [
     "${chip_root}/examples/evse-app/evse-common:evse-common-lib",
+    "${chip_root}/examples/evse-app/linux:everest-fault-mapping",
     "${chip_root}/examples/evse-app/linux:test-evse-targets-store",
     "${chip_root}/src/app",
     "${chip_root}/src/app/common:cluster-objects",
