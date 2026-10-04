@@ -32,6 +32,7 @@ public:
     static constexpr const char kEvInfoVariable[]         = "ev_info";
     static constexpr const char kPowermeterVariable[]     = "powermeter";
     static constexpr const char kEnforcedLimitsVariable[] = "enforced_limits";
+    static constexpr const char kAcPpAmpacityVariable[]   = "ac_pp_ampacity";
     static constexpr const char kSessionEventVariable[]   = "session_event";
     static constexpr const char kSessionInfoVariable[]    = "session_info";
 

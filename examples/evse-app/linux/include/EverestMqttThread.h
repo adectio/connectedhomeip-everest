@@ -108,6 +108,7 @@ private:
     void HandleEvInfoMessage(const std::string & payload);
     void HandlePowermeterMessage(const std::string & payload);
     void HandleLimitsMessage(const std::string & payload);
+    void HandleAcPpAmpacityMessage(const std::string & payload);
     void HandleSessionEventMessage(const std::string & payload);
     void HandleSessionInfoMessage(const std::string & payload);
     void HandleActiveErrorsMessage(const std::string & payload);
@@ -130,6 +131,7 @@ private:
     std::string mEvInfoTopic;
     std::string mPowermeterTopic;
     std::string mLimitsTopic;
+    std::string mAcPpAmpacityTopic;
     std::string mSessionEventTopic;
     std::string mSessionInfoTopic;
     std::string mActiveErrorsResponseTopic;
@@ -145,6 +147,7 @@ private:
     std::optional<int64_t> mLastHardwareMaxCurrentMilliAmps;
     std::optional<int64_t> mLastHardwareMaxDischargeCurrentMilliAmps;
     std::optional<int64_t> mLastCircuitCapacityMilliAmps;
+    std::optional<int64_t> mProximityPilotCableAmpacityMilliAmps;
     std::optional<int64_t> mLastNominalMainsVoltageMilliVolts;
     std::optional<int> mLastMatterEvseState;
     std::optional<uint8_t> mLastStateOfChargePercent;

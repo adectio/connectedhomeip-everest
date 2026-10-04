@@ -53,6 +53,7 @@ struct MatterEvseUpdate
     std::optional<int64_t> maxHardwareDischargeCurrentLimitMilliAmps;
     std::optional<int64_t> nominalMainsVoltageMilliVolts;
     std::optional<int64_t> circuitCapacityMilliAmps;
+    std::optional<int64_t> cableAssemblyCurrentLimitMilliAmps;
     std::optional<int64_t> activePowerMilliWatts;
     std::optional<int64_t> voltageMilliVolts;
     std::optional<int64_t> activeCurrentMilliAmps;
@@ -77,6 +78,7 @@ enum class TopicSelector
     kEvInfo,
     kPowermeter,
     kLimits,
+    kAcPpAmpacity,
     kSessionEvent,
     kSessionInfo,
 };
@@ -144,6 +146,11 @@ public:
         if (self->mUpdate.circuitCapacityMilliAmps.has_value())
         {
             delegate->HwSetCircuitCapacity(self->mUpdate.circuitCapacityMilliAmps.value());
+        }
+
+        if (self->mUpdate.cableAssemblyCurrentLimitMilliAmps.has_value())
+        {
+            delegate->HwSetCableAssemblyLimit(self->mUpdate.cableAssemblyCurrentLimitMilliAmps.value());
         }
 
         if (self->mUpdate.activePowerMilliWatts.has_value() && self->mUpdate.voltageMilliVolts.has_value() &&
@@ -460,7 +467,8 @@ TopicSelector ParseTopicSelector(std::string_view topic)
     static const std::unordered_map<std::string_view, TopicSelector> kTopicSelectors = {
         { "hw_capabilities", TopicSelector::kHwCapabilities }, { "ev_info", TopicSelector::kEvInfo },
         { "powermeter", TopicSelector::kPowermeter },          { "enforced_limits", TopicSelector::kLimits },
-        { "session_event", TopicSelector::kSessionEvent },     { "session_info", TopicSelector::kSessionInfo },
+        { "ac_pp_ampacity", TopicSelector::kAcPpAmpacity },    { "session_event", TopicSelector::kSessionEvent },
+        { "session_info", TopicSelector::kSessionInfo },
     };
 
     const auto selector = kTopicSelectors.find(topicLeaf);
@@ -510,6 +518,32 @@ std::optional<StateEnum> ParseSessionInfoState(std::string_view state)
     return (selector != kSessionInfoStates.end()) ? std::make_optional(selector->second) : std::nullopt;
 }
 
+std::optional<int64_t> ParseProximityPilotAmpacityMilliAmps(const Json::Value & data)
+{
+    if (!data.isObject() || !data["ampacity"].isString())
+    {
+        return std::nullopt;
+    }
+
+    static const std::unordered_map<std::string_view, int64_t> kAmpacityMilliAmps = {
+        { "A_13", 13000 },
+        { "A_20", 20000 },
+        { "A_32", 32000 },
+        // This PP encoding represents 63 A for a three-phase cable and 70 A
+        // for a single-phase cable. Use the conservative value.
+        { "A_63_3ph_70_1ph", 63000 },
+    };
+
+    const std::string & ampacity = data["ampacity"].asString();
+    if (ampacity == "None")
+    {
+        return std::nullopt;
+    }
+
+    const auto it = kAmpacityMilliAmps.find(ampacity);
+    return (it != kAmpacityMilliAmps.end()) ? std::make_optional(it->second) : std::nullopt;
+}
+
 std::optional<std::pair<std::string, chip::app::Clusters::EnergyEvse::FaultStateEnum>>
 ParseEVerestFault(const Json::Value & error, std::string_view expectedOriginModuleId)
 {
@@ -544,6 +578,7 @@ EverestMqttThread::EverestMqttThread(Config config) :
     mEvInfoTopic(mApiTopics.Variable(everest::mqtt::EvseManagerApiTopics::kEvInfoVariable)),
     mPowermeterTopic(mApiTopics.Variable(everest::mqtt::EvseManagerApiTopics::kPowermeterVariable)),
     mLimitsTopic(mApiTopics.Variable(everest::mqtt::EvseManagerApiTopics::kEnforcedLimitsVariable)),
+    mAcPpAmpacityTopic(mApiTopics.Variable(everest::mqtt::EvseManagerApiTopics::kAcPpAmpacityVariable)),
     mSessionEventTopic(mApiTopics.Variable(everest::mqtt::EvseManagerApiTopics::kSessionEventVariable)),
     mSessionInfoTopic(mApiTopics.Variable(everest::mqtt::EvseManagerApiTopics::kSessionInfoVariable)),
     mActiveErrorsResponseTopic(
@@ -881,8 +916,8 @@ bool EverestMqttThread::SubscribeTopics()
     const char * const commandResponseTopics[] = { mPauseChargingResponseTopic.c_str(), mResumeChargingResponseTopic.c_str(),
                                                    mActiveErrorsResponseTopic.c_str() };
     const char * const variableTopics[] = { mHwCapabilitiesTopic.c_str(), mEvInfoTopic.c_str(),       mPowermeterTopic.c_str(),
-                                            mLimitsTopic.c_str(),         mSessionEventTopic.c_str(), mSessionInfoTopic.c_str(),
-                                            mErrorRaisedTopic.c_str(),    mErrorClearedTopic.c_str() };
+                                            mLimitsTopic.c_str(),         mAcPpAmpacityTopic.c_str(), mSessionEventTopic.c_str(),
+                                            mSessionInfoTopic.c_str(),    mErrorRaisedTopic.c_str(),   mErrorClearedTopic.c_str() };
 
     for (const char * topic : commandResponseTopics)
     {
@@ -959,6 +994,9 @@ void EverestMqttThread::HandleMessage(const std::string & topic, const std::stri
             break;
         case TopicSelector::kLimits:
             HandleLimitsMessage(payload);
+            break;
+        case TopicSelector::kAcPpAmpacity:
+            HandleAcPpAmpacityMessage(payload);
             break;
         case TopicSelector::kSessionEvent:
             HandleSessionEventMessage(payload);
@@ -1448,6 +1486,54 @@ void EverestMqttThread::HandleLimitsMessage(const std::string & payload)
 
     MatterEvseUpdate update;
     update.circuitCapacityMilliAmps = circuitCapacityMilliAmps;
+    update.cableAssemblyCurrentLimitMilliAmps =
+        mProximityPilotCableAmpacityMilliAmps.value_or(circuitCapacityMilliAmps.value());
+    if (!mLastHardwareMaxCurrentMilliAmps.has_value())
+    {
+        // hw_capabilities may have been published before this bridge connected.
+        // enforced_limits is a current safe ceiling until that value arrives.
+        mLastHardwareMaxCurrentMilliAmps              = circuitCapacityMilliAmps;
+        update.maxHardwareChargeCurrentLimitMilliAmps = circuitCapacityMilliAmps;
+    }
+    ScheduleMatterUpdate(std::move(update));
+}
+
+void EverestMqttThread::HandleAcPpAmpacityMessage(const std::string & payload)
+{
+    Json::Value data;
+    if (!ParseEVerestApiPayload(payload, data))
+    {
+        return;
+    }
+
+    if (!data["ampacity"].isString())
+    {
+        ChipLogError(AppServer, "[%s] ac_pp_ampacity payload is missing ampacity", kLogModule);
+        return;
+    }
+
+    const std::string ampacity = data["ampacity"].asString();
+    const auto cableAmpacity   = ParseProximityPilotAmpacityMilliAmps(data);
+    if (ampacity != "None" && !cableAmpacity.has_value())
+    {
+        ChipLogError(AppServer, "[%s] ac_pp_ampacity payload has unsupported ampacity %s", kLogModule, ampacity.c_str());
+        return;
+    }
+
+    if (mProximityPilotCableAmpacityMilliAmps == cableAmpacity)
+    {
+        return;
+    }
+
+    mProximityPilotCableAmpacityMilliAmps = cableAmpacity;
+    if (!mLastCircuitCapacityMilliAmps.has_value())
+    {
+        return;
+    }
+
+    MatterEvseUpdate update;
+    update.cableAssemblyCurrentLimitMilliAmps =
+        mProximityPilotCableAmpacityMilliAmps.value_or(mLastCircuitCapacityMilliAmps.value());
     ScheduleMatterUpdate(std::move(update));
 }
 
