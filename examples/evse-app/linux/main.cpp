@@ -42,6 +42,7 @@ static bool EnergyAppOptionHandler(const char * aProgram, chip::ArgParser::Optio
 constexpr uint16_t kOptionFeatureMap           = 0xffd1;
 constexpr uint16_t kOptionErrorHistoryModuleId = 0xffd2;
 constexpr uint16_t kOptionErrorOriginModuleId  = 0xffd3;
+constexpr uint16_t kOptionExternalEnergyLimitsModuleId = 0xffd4;
 
 constexpr chip::EndpointId kEvseEndpoint = 1;
 
@@ -61,6 +62,7 @@ static chip::ArgParser::OptionDef sEnergyAppOptionDefs[] = {
     { "featureSet", chip::ArgParser::kArgumentRequired, kOptionFeatureMap },
     { "everest-error-history-module-id", chip::ArgParser::kArgumentRequired, kOptionErrorHistoryModuleId },
     { "everest-error-origin-module-id", chip::ArgParser::kArgumentRequired, kOptionErrorOriginModuleId },
+    { "everest-external-energy-limits-module-id", chip::ArgParser::kArgumentRequired, kOptionExternalEnergyLimitsModuleId },
     { nullptr }
 };
 
@@ -69,7 +71,8 @@ static chip::ArgParser::OptionSet sCmdLineOptions = { EnergyAppOptionHandler, //
                                                       "PROGRAM OPTIONS",      // help group
                                                       "-f, --featureSet <value>\n"
                                                       "    --everest-error-history-module-id <module-id>\n"
-                                                      "    --everest-error-origin-module-id <module-id>\n" };
+                                                      "    --everest-error-origin-module-id <module-id>\n"
+                                                      "    --everest-external-energy-limits-module-id <module-id>\n" };
 
 namespace chip {
 namespace app {
@@ -147,6 +150,9 @@ static bool EnergyAppOptionHandler(const char * aProgram, chip::ArgParser::Optio
         break;
     case kOptionErrorOriginModuleId:
         gEverestMqttConfig.errorOriginModuleId = aValue;
+        break;
+    case kOptionExternalEnergyLimitsModuleId:
+        gEverestMqttConfig.externalEnergyLimitsModuleId = aValue;
         break;
     default:
         ChipLogError(Support, "%s: INTERNAL ERROR: Unhandled option: %s\n", aProgram, aName);

@@ -500,6 +500,10 @@ void EVSEManufacturer::ApplicationCallbackHandler(const EVSECbInfo * cb, intptr_
     case EVSECallbackType::ChargeCurrentChanged:
         ChipLogProgress(AppServer, "EVSE callback - maxChargeCurrent changed to %ld",
                         static_cast<long>(cb->ChargingCurrent.maximumChargeCurrent));
+        if (EverestMqttThread * mqttThread = GetEverestMqttThread())
+        {
+            mqttThread->HandleMatterMaximumChargeCurrentChange(cb->ChargingCurrent.maximumChargeCurrent);
+        }
         TEMPORARY_RETURN_IGNORED pClass->ComputeChargingSchedule();
         pClass->UpdateEVFakeReadings(cb->ChargingCurrent.maximumChargeCurrent);
         break;

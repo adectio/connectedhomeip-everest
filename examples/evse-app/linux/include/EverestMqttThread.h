@@ -47,6 +47,7 @@ public:
         std::string apiModuleId          = "evse_manager_api";
         std::string errorHistoryModuleId = "error_history_1";
         std::string errorOriginModuleId  = "bsp_1";
+        std::string externalEnergyLimitsModuleId;
         std::chrono::seconds retryBackoff{ 5 };
     };
 
@@ -68,6 +69,7 @@ public:
     ConnectionState GetConnectionState() const;
     void HandleMatterStateChange(chip::app::Clusters::EnergyEvse::StateEnum state,
                                  chip::app::Clusters::EnergyEvse::SupplyStateEnum supplyState);
+    void HandleMatterMaximumChargeCurrentChange(int64_t maximumChargeCurrent);
 
 private:
     enum class CommandSelector
@@ -75,6 +77,14 @@ private:
         Unknown,
         PauseChargingResponse,
         ResumeChargingResponse,
+    };
+
+    enum class ExternalEnergyLimitsState
+    {
+        Disabled,
+        AwaitingBaselineCapacity,
+        ApplyingBaselineCapacity,
+        Active,
     };
 
     struct PendingCommand
@@ -95,6 +105,7 @@ private:
     static void HandleDisconnect(struct mosquitto * mosq, void * obj, int rc);
     static void HandleMessage(struct mosquitto * mosq, void * obj, const struct mosquitto_message * message);
     static void SynchronizeMatterSupplyState(intptr_t context);
+    static void CompleteExternalEnergyLimitsBootstrap(intptr_t context);
 
     void ThreadMain();
     bool Connect();
@@ -120,11 +131,14 @@ private:
     void UpdateMatterFault();
     bool SendPauseChargingCommand();
     bool SendResumeChargingCommand();
+    bool PublishMaximumChargeCurrent(int64_t maximumChargeCurrent);
+    bool PublishUnconstrainedExternalLimits();
     bool SendEVerestCommand(const std::string & cmdName, const std::string & responseTopic, std::optional<bool> expectedRetval);
 
     Config mConfig;
     everest::mqtt::EvseManagerApiTopics mApiTopics;
     everest::mqtt::ErrorHistoryConsumerApiTopics mErrorHistoryApiTopics;
+    everest::mqtt::ExternalEnergyLimitsApiTopics mExternalEnergyLimitsApiTopics;
     std::string mPauseChargingResponseTopic;
     std::string mResumeChargingResponseTopic;
     std::string mHwCapabilitiesTopic;
@@ -137,6 +151,7 @@ private:
     std::string mActiveErrorsResponseTopic;
     std::string mErrorRaisedTopic;
     std::string mErrorClearedTopic;
+    std::string mSetExternalLimitsTopic;
     std::thread mThread;
     mutable std::mutex mMutex;
     std::condition_variable mCondition;
@@ -160,7 +175,8 @@ private:
     std::optional<int64_t> mSessionEnergyImportStartMilliWattHours;
     std::optional<int64_t> mSessionEnergyExportStartMilliWattHours;
     std::optional<int> mLastForwardedSupplyState;
-    bool mActiveErrorsSeeded = false;
+    std::atomic<ExternalEnergyLimitsState> mExternalEnergyLimitsState = ExternalEnergyLimitsState::Disabled;
+    bool mActiveErrorsSeeded                                          = false;
     std::vector<PendingFaultMessage> mPendingFaultMessages;
     std::unordered_map<std::string, chip::app::Clusters::EnergyEvse::FaultStateEnum> mActiveFaults;
     chip::app::Clusters::EnergyEvse::FaultStateEnum mSelectedMatterFault =

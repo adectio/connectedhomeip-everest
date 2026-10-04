@@ -73,4 +73,19 @@ private:
     std::string mClientId;
 };
 
+class ExternalEnergyLimitsApiTopics
+{
+public:
+    static constexpr const char kSetExternalLimitsCommand[] = "set_external_limits";
+
+    explicit ExternalEnergyLimitsApiTopics(const std::string & apiModuleId) :
+        mApiBase("everest_api/1/external_energy_limits_consumer/" + apiModuleId)
+    {}
+
+    std::string Command(const char * command) const { return mApiBase + "/m2e/" + command; }
+
+private:
+    std::string mApiBase;
+};
+
 } // namespace everest::mqtt

@@ -95,6 +95,12 @@ details.
     `FaultState`. Errors from other EVerest modules are ignored. The default is
     `bsp_1`.
 
+-   `--everest-external-energy-limits-module-id <module-id>`
+
+    Selects the EVerest `external_energy_limits_consumer_API` module used to
+    apply Matter `MaximumChargeCurrent`. This option is unset by default;
+    configure the module and provide its ID to forward the user limit.
+
 ## EVerest Fault Bridge
 
 The bridge requests the configured Error History Consumer's active errors at
@@ -155,6 +161,49 @@ For example, `MREC2GroundFailure` maps to `GroundFault`,
 `MREC4OverCurrentFailure` to `OverCurrent`, and
 `MREC3HighTemperature` to `OverTemperature`. A `VendorWarning` is intentionally
 ignored; unknown stopping errors map to `Other`.
+
+## EVerest User Charge Limit Bridge
+
+When configured with `--everest-external-energy-limits-module-id`, the bridge
+forwards Matter's effective `MaximumChargeCurrent` to EVerest's stable
+`external_energy_limits_consumer_API`. It publishes an import schedule with
+`ac_max_current_A` in amperes.
+
+At its first connection, the bridge first publishes an unconstrained schedule,
+then records the next positive EVerest `enforced_limits` current as Matter
+`CircuitCapacity`. It then begins forwarding Matter's effective limit. Later
+`enforced_limits` updates are intentionally not used to change
+`CircuitCapacity`, because they include the Matter external-limit contribution.
+This bootstrap value represents EVerest's aggregate available capacity at that
+time, including any other active EVerest constraints.
+
+For example, when the EVSE manager exposes `evse_manager_1_api_sink` with its
+`external_limits` implementation, add this module to the EVerest configuration:
+
+```yaml
+active_modules:
+  matter_external_limits:
+    module: external_energy_limits_consumer_API
+    config_module:
+      cfg_communication_check_to_s: 0
+      cfg_heartbeat_interval_ms: 40000
+    connections:
+      energy_node:
+        - module_id: evse_manager_1_api_sink
+          implementation_id: external_limits
+```
+
+Then run the application with:
+
+```sh
+./chip-evse-app \
+  --everest-external-energy-limits-module-id matter_external_limits
+```
+
+If a Matter user limit reduces the effective limit to `0 A`, the bridge
+publishes a zero import-current limit to EVerest. The bridge republishes the
+current effective limit after reconnecting to MQTT. It does not repeat baseline
+capacity discovery after reconnecting.
 
 ## Running the Complete Example on Raspberry Pi 4
 
