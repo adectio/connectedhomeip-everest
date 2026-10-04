@@ -340,6 +340,7 @@ private:
     Status HandleDisabledEvent();
     Status HandleFaultRaised();
     Status HandleFaultCleared();
+    Status SetStateFromHardwareState(StateEnum newState);
 
     /**
      * @brief Helper functions to work out the charge & discharge limits based on conditions and settings

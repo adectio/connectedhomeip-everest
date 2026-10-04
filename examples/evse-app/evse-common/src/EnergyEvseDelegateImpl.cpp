@@ -44,6 +44,18 @@ Status EnergyEvseDelegate::Disable()
 
     VerifyOrReturnValue(mInstance != nullptr, Status::Failure);
 
+    if (GetSupplyState() == SupplyStateEnum::kDisabled)
+    {
+        return Status::Success;
+    }
+
+    const bool faultPresent = GetFaultState() != FaultStateEnum::kNoError;
+    if (!faultPresent && GetSupplyState() == SupplyStateEnum::kDisabledDiagnostics)
+    {
+        ChipLogError(AppServer, "EVSE: cannot disable while diagnostics are active");
+        return Status::Failure;
+    }
+
     DataModel::Nullable<uint32_t> disableTime(0);
     /* update ChargingEnabledUntil & DischargingEnabledUntil to show 0 */
     TEMPORARY_RETURN_IGNORED mInstance->SetChargingEnabledUntil(disableTime);
@@ -59,6 +71,13 @@ Status EnergyEvseDelegate::Disable()
     mMaximumDischargingCurrentLimitFromCommand = 0;
     ComputeMaxDischargeCurrentLimit();
 
+    if (faultPresent)
+    {
+        // Preserve the requested disabled state until the fault clears.
+        mSupplyStateBeforeFault = SupplyStateEnum::kDisabled;
+        return Status::Success;
+    }
+
     return HandleStateMachineEvent(EVSEStateMachineEvent::DisabledEvent);
 }
 
@@ -73,6 +92,13 @@ Status EnergyEvseDelegate::EnableCharging(const DataModel::Nullable<uint32_t> & 
                                           const int64_t & minimumChargeCurrent, const int64_t & maximumChargeCurrent)
 {
     ChipLogProgress(AppServer, "EnergyEvseDelegate::EnableCharging()");
+
+    VerifyOrReturnValue(mInstance != nullptr, Status::Failure);
+    const Status faultOrDiagnosticStatus = CheckFaultOrDiagnostic();
+    if (faultOrDiagnosticStatus != Status::Success)
+    {
+        return faultOrDiagnosticStatus;
+    }
 
     if (maximumChargeCurrent < kMinimumChargeCurrentLimit)
     {
@@ -91,8 +117,6 @@ Status EnergyEvseDelegate::EnableCharging(const DataModel::Nullable<uint32_t> & 
         ChipLogError(AppServer, "Minium Current > Maximum Current!");
         return Status::ConstraintError;
     }
-
-    VerifyOrReturnValue(mInstance != nullptr, Status::Failure);
 
     if (chargingEnabledUntil.IsNull())
     {
@@ -127,13 +151,18 @@ Status EnergyEvseDelegate::EnableDischarging(const DataModel::Nullable<uint32_t>
 {
     ChipLogProgress(AppServer, "EnergyEvseDelegate::EnableDischarging() called.");
 
+    VerifyOrReturnValue(mInstance != nullptr, Status::Failure);
+    const Status faultOrDiagnosticStatus = CheckFaultOrDiagnostic();
+    if (faultOrDiagnosticStatus != Status::Success)
+    {
+        return faultOrDiagnosticStatus;
+    }
+
     if (maximumDischargeCurrent < kMinimumChargeCurrentLimit)
     {
         ChipLogError(AppServer, "Maximum Discharging Current outside limits - cannot be negative");
         return Status::ConstraintError;
     }
-
-    VerifyOrReturnValue(mInstance != nullptr, Status::Failure);
 
     if (dischargingEnabledUntil.IsNull())
     {
@@ -930,7 +959,7 @@ Status EnergyEvseDelegate::HandleStateMachineEvent(EVSEStateMachineEvent event)
 Status EnergyEvseDelegate::HandleEVPluggedInEvent()
 {
     StateEnum currentState = GetState();
-    if (currentState == StateEnum::kNotPluggedIn)
+    if (currentState == StateEnum::kNotPluggedIn || currentState == StateEnum::kFault)
     {
         VerifyOrReturnValue(mInstance != nullptr, Status::Failure);
 
@@ -940,7 +969,7 @@ Status EnergyEvseDelegate::HandleEVPluggedInEvent()
         SendEVConnectedEvent();
 
         /* Set the state to either PluggedInNoDemand or PluggedInDemand as indicated by mHwState */
-        TEMPORARY_RETURN_IGNORED mInstance->SetState(mHwState);
+        return SetStateFromHardwareState(mHwState);
     }
     // else we are already plugged in - ignore
     return Status::Success;
@@ -963,8 +992,7 @@ Status EnergyEvseDelegate::HandleEVNotDetectedEvent()
     // TODO get energy meter readings - #35370
     mSession.StopSession(mInstance, 0, 0);
     SendEVNotDetectedEvent();
-    TEMPORARY_RETURN_IGNORED mInstance->SetState(StateEnum::kNotPluggedIn);
-    return Status::Success;
+    return SetStateFromHardwareState(StateEnum::kNotPluggedIn);
 }
 
 Status EnergyEvseDelegate::HandleEVNoDemandEvent()
@@ -981,8 +1009,7 @@ Status EnergyEvseDelegate::HandleEVNoDemandEvent()
         SendEnergyTransferStoppedEvent(EnergyTransferStoppedReasonEnum::kEVStopped);
     }
     /* We must still be plugged in to get here - so no need to check if we are plugged in! */
-    TEMPORARY_RETURN_IGNORED mInstance->SetState(StateEnum::kPluggedInNoDemand);
-    return Status::Success;
+    return SetStateFromHardwareState(StateEnum::kPluggedInNoDemand);
 }
 Status EnergyEvseDelegate::HandleEVDemandEvent()
 {
@@ -993,16 +1020,29 @@ Status EnergyEvseDelegate::HandleEVDemandEvent()
     switch (currentSupplyState)
     {
     case SupplyStateEnum::kChargingEnabled:
+    {
         ComputeMaxChargeCurrentLimit();
-        TEMPORARY_RETURN_IGNORED mInstance->SetState(StateEnum::kPluggedInCharging);
+        const Status status = SetStateFromHardwareState(StateEnum::kPluggedInCharging);
+        if (status != Status::Success)
+        {
+            return status;
+        }
         SendEnergyTransferStartedEvent();
         break;
+    }
     case SupplyStateEnum::kDischargingEnabled:
+    {
         ComputeMaxDischargeCurrentLimit();
-        TEMPORARY_RETURN_IGNORED mInstance->SetState(StateEnum::kPluggedInDischarging);
+        const Status status = SetStateFromHardwareState(StateEnum::kPluggedInDischarging);
+        if (status != Status::Success)
+        {
+            return status;
+        }
         SendEnergyTransferStartedEvent();
         break;
+    }
     case SupplyStateEnum::kEnabled:
+    {
         /* We are enabled for both charging and discharging
         since the vehicle is asking for demand, we should start charging
         NOTE: for discharging the PowerAdjustment feature of DEM is used.
@@ -1011,22 +1051,54 @@ Status EnergyEvseDelegate::HandleEVDemandEvent()
         */
         ComputeMaxChargeCurrentLimit();
         ComputeMaxDischargeCurrentLimit();
-        TEMPORARY_RETURN_IGNORED mInstance->SetState(StateEnum::kPluggedInCharging);
+        const Status status = SetStateFromHardwareState(StateEnum::kPluggedInCharging);
+        if (status != Status::Success)
+        {
+            return status;
+        }
         SendEnergyTransferStartedEvent();
         break;
+    }
     case SupplyStateEnum::kDisabled:
     case SupplyStateEnum::kDisabledError:
     case SupplyStateEnum::kDisabledDiagnostics:
+    {
         /* We must be plugged in, and the event is asking for demand
          * but we can't charge or discharge now - leave it as kPluggedInDemand */
-        TEMPORARY_RETURN_IGNORED mInstance->SetState(StateEnum::kPluggedInDemand);
+        const Status status = SetStateFromHardwareState(StateEnum::kPluggedInDemand);
+        if (status != Status::Success)
+        {
+            return status;
+        }
         break;
+    }
     case SupplyStateEnum::kUnknownEnumValue:
         ChipLogError(AppServer, "EVSE: HandleEVDemandEvent called in unexpected SupplyState");
         return Status::Failure;
     default:
         break;
     }
+    return Status::Success;
+}
+
+Status EnergyEvseDelegate::SetStateFromHardwareState(StateEnum newState)
+{
+    VerifyOrReturnValue(mInstance != nullptr, Status::Failure);
+
+    // Hardware changes remain observable through session events, but State
+    // must remain Fault until the current fault has been cleared.
+    if (GetFaultState() != FaultStateEnum::kNoError)
+    {
+        return Status::Success;
+    }
+
+    CHIP_ERROR err = mInstance->SetState(newState);
+    if (err != CHIP_NO_ERROR)
+    {
+        ChipLogError(AppServer, "EVSE: failed to update State from hardware: %" CHIP_ERROR_FORMAT, err.Format());
+        return Status::Failure;
+    }
+
     return Status::Success;
 }
 
@@ -1204,7 +1276,7 @@ Status EnergyEvseDelegate::HandleDisabledEvent()
  * Note that if multiple faults happen and this is called repeatedly, we only
  * save the previous SupplyState for the first fault. State is restored from
  * the current hardware state because it may change while a fault is active.
-)*/
+ */
 Status EnergyEvseDelegate::HandleFaultRaised()
 {
     VerifyOrReturnValue(mInstance != nullptr, Status::Failure);
@@ -1231,9 +1303,44 @@ Status EnergyEvseDelegate::HandleFaultCleared()
 
     VerifyOrReturnValue(mInstance != nullptr, Status::Failure);
 
-    // EVerest may have updated the hardware state while the Matter fault was active.
-    TEMPORARY_RETURN_IGNORED mInstance->SetState(mHwState);
-    TEMPORARY_RETURN_IGNORED mInstance->SetSupplyState(mSupplyStateBeforeFault);
+    const SupplyStateEnum supplyStateToRestore = mSupplyStateBeforeFault;
+    CHIP_ERROR err                             = mInstance->SetSupplyState(supplyStateToRestore);
+    if (err != CHIP_NO_ERROR)
+    {
+        ChipLogError(AppServer, "EVSE: failed to restore SupplyState after clearing fault: %" CHIP_ERROR_FORMAT, err.Format());
+        return Status::Failure;
+    }
+
+    // Reconstruct the derived transfer state from the current hardware state
+    // without emitting a duplicate energy-transfer event.
+    StateEnum stateToRestore = mHwState;
+    if (mHwState == StateEnum::kPluggedInDemand)
+    {
+        switch (supplyStateToRestore)
+        {
+        case SupplyStateEnum::kChargingEnabled:
+        case SupplyStateEnum::kEnabled:
+            stateToRestore = StateEnum::kPluggedInCharging;
+            break;
+        case SupplyStateEnum::kDischargingEnabled:
+            stateToRestore = StateEnum::kPluggedInDischarging;
+            break;
+        case SupplyStateEnum::kDisabled:
+        case SupplyStateEnum::kDisabledError:
+        case SupplyStateEnum::kDisabledDiagnostics:
+            break;
+        case SupplyStateEnum::kUnknownEnumValue:
+            ChipLogError(AppServer, "EVSE: invalid SupplyState while clearing fault");
+            return Status::Failure;
+        }
+    }
+
+    err = mInstance->SetState(stateToRestore);
+    if (err != CHIP_NO_ERROR)
+    {
+        ChipLogError(AppServer, "EVSE: failed to restore State after clearing fault: %" CHIP_ERROR_FORMAT, err.Format());
+        return Status::Failure;
+    }
 
     /* Put back the sentinel to catch new faults if more are raised. */
     mSupplyStateBeforeFault = SupplyStateEnum::kUnknownEnumValue;
