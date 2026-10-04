@@ -740,8 +740,13 @@ Status EnergyEvseDelegate::HwSetFault(FaultStateEnum newFaultState)
      * and the state prior to the fault being raised */
     SendFaultEvent(newFaultState);
 
-    /* Updated FaultState before we call into the handlers */
-    TEMPORARY_RETURN_IGNORED mInstance->SetFaultState(newFaultState);
+    /* Update FaultState before notifying the state machine. */
+    const CHIP_ERROR err = mInstance->SetFaultState(newFaultState);
+    if (err != CHIP_NO_ERROR)
+    {
+        ChipLogError(AppServer, "EVSE: failed to update FaultState: %" CHIP_ERROR_FORMAT, err.Format());
+        return Status::Failure;
+    }
 
     if (newFaultState == FaultStateEnum::kNoError)
     {
