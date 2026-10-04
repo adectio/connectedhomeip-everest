@@ -607,10 +607,10 @@ EverestMqttThread::ConnectionState EverestMqttThread::GetConnectionState() const
 void EverestMqttThread::HandleMatterStateChange(chip::app::Clusters::EnergyEvse::StateEnum state,
                                                 chip::app::Clusters::EnergyEvse::SupplyStateEnum supplyState)
 {
-    static_cast<void>(state);
-
     if (gApplyingEVerestFault)
     {
+        ChipLogDetail(AppServer, "[%s] Suppressing EVerest command for fault-driven Matter state %d, supply state %d",
+                      kLogModule, static_cast<int>(state), static_cast<int>(supplyState));
         return;
     }
 
@@ -619,17 +619,20 @@ void EverestMqttThread::HandleMatterStateChange(chip::app::Clusters::EnergyEvse:
         return;
     }
 
-    bool success = false;
+    bool success              = false;
+    const char * commandName = nullptr;
     switch (supplyState)
     {
     case chip::app::Clusters::EnergyEvse::SupplyStateEnum::kDisabled:
     case chip::app::Clusters::EnergyEvse::SupplyStateEnum::kDisabledError:
     case chip::app::Clusters::EnergyEvse::SupplyStateEnum::kDisabledDiagnostics:
+        commandName = everest::mqtt::EvseManagerApiTopics::kPauseChargingCommand;
         success = SendPauseChargingCommand();
         break;
     case chip::app::Clusters::EnergyEvse::SupplyStateEnum::kChargingEnabled:
     case chip::app::Clusters::EnergyEvse::SupplyStateEnum::kDischargingEnabled:
     case chip::app::Clusters::EnergyEvse::SupplyStateEnum::kEnabled:
+        commandName = everest::mqtt::EvseManagerApiTopics::kResumeChargingCommand;
         success = SendResumeChargingCommand();
         break;
     case chip::app::Clusters::EnergyEvse::SupplyStateEnum::kUnknownEnumValue:
@@ -642,6 +645,8 @@ void EverestMqttThread::HandleMatterStateChange(chip::app::Clusters::EnergyEvse:
     if (success)
     {
         mLastForwardedSupplyState = static_cast<int>(supplyState);
+        ChipLogProgress(AppServer, "[%s] Forwarded Matter state %d, supply state %d as EVerest %s", kLogModule,
+                        static_cast<int>(state), static_cast<int>(supplyState), commandName);
     }
 }
 
