@@ -89,6 +89,11 @@ enum class SessionEventSelector
     kUnplugged,
 };
 
+// HwSetFault synchronously notifies the application twice: once after changing
+// State and once after changing SupplyState. Both changes originated in EVerest,
+// so they must not be sent back as EVSE manager commands.
+thread_local bool gApplyingEVerestFault = false;
+
 class MatterEvseUpdateHandler
 {
 public:
@@ -169,7 +174,10 @@ public:
 
         if (self->mUpdate.faultState.has_value())
         {
+            const bool wasApplyingEVerestFault = gApplyingEVerestFault;
+            gApplyingEVerestFault              = true;
             const auto status = delegate->HwSetFault(self->mUpdate.faultState.value());
+            gApplyingEVerestFault              = wasApplyingEVerestFault;
             if (status != chip::Protocols::InteractionModel::Status::Success)
             {
                 ChipLogError(AppServer, "[%s] Failed to update Matter fault state", kLogModule);
@@ -600,6 +608,11 @@ void EverestMqttThread::HandleMatterStateChange(chip::app::Clusters::EnergyEvse:
                                                 chip::app::Clusters::EnergyEvse::SupplyStateEnum supplyState)
 {
     static_cast<void>(state);
+
+    if (gApplyingEVerestFault)
+    {
+        return;
+    }
 
     if (mLastForwardedSupplyState == static_cast<int>(supplyState))
     {
