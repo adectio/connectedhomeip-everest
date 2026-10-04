@@ -46,7 +46,7 @@ bool IsEnabledAtStartup(const chip::app::DataModel::Nullable<uint32_t> & enabled
 
 } // namespace
 
-CHIP_ERROR EnergyEvseManager::LoadPersistentAttributes()
+CHIP_ERROR EnergyEvseManager::LoadPersistentValues()
 {
 
     SafeAttributePersistenceProvider * aProvider = GetSafeAttributePersistenceProvider();
@@ -120,6 +120,47 @@ CHIP_ERROR EnergyEvseManager::LoadPersistentAttributes()
         ReturnErrorOnFailure(SetSupplyState(SupplyStateEnum::kDischargingEnabled));
     }
 
+    int64_t tempMinimumChargeCurrent;
+    err = aProvider->ReadScalarValue(ConcreteAttributePath(aEndpointId, EnergyEvse::Id, Attributes::MinimumChargeCurrent::Id),
+                                     tempMinimumChargeCurrent);
+    if (err == CHIP_NO_ERROR)
+    {
+        ChipLogDetail(AppServer, "EVSE: successfully loaded MinimumChargeCurrent from NVM");
+        ReturnErrorOnFailure(SetMinimumChargeCurrent(tempMinimumChargeCurrent));
+    }
+    else if (err != CHIP_ERROR_PERSISTED_STORAGE_VALUE_NOT_FOUND)
+    {
+        ChipLogError(AppServer, "EVSE: Unable to restore persisted MinimumChargeCurrent value");
+    }
+
+    // These keys hold the raw command limits, not the derived maximum-current
+    // attributes. They are written only by the enable, disable, and expiry paths.
+    int64_t maximumChargingCurrent;
+    err = aProvider->ReadScalarValue(ConcreteAttributePath(aEndpointId, EnergyEvse::Id, Attributes::MaximumChargeCurrent::Id),
+                                     maximumChargingCurrent);
+    if (err == CHIP_NO_ERROR)
+    {
+        VerifyOrReturnError(maximumChargingCurrent >= kMinimumChargeCurrentLimit, CHIP_ERROR_INVALID_ARGUMENT);
+        mDelegate->mMaximumChargingCurrentLimitFromCommand = maximumChargingCurrent;
+    }
+    else if (err != CHIP_ERROR_PERSISTED_STORAGE_VALUE_NOT_FOUND)
+    {
+        ChipLogError(AppServer, "EVSE: Unable to restore persisted charging command current limit");
+    }
+
+    int64_t maximumDischargingCurrent;
+    err = aProvider->ReadScalarValue(
+        ConcreteAttributePath(aEndpointId, EnergyEvse::Id, Attributes::MaximumDischargeCurrent::Id), maximumDischargingCurrent);
+    if (err == CHIP_NO_ERROR)
+    {
+        VerifyOrReturnError(maximumDischargingCurrent >= kMinimumChargeCurrentLimit, CHIP_ERROR_INVALID_ARGUMENT);
+        mDelegate->mMaximumDischargingCurrentLimitFromCommand = maximumDischargingCurrent;
+    }
+    else if (err != CHIP_ERROR_PERSISTED_STORAGE_VALUE_NOT_FOUND)
+    {
+        ChipLogError(AppServer, "EVSE: Unable to restore persisted discharging command current limit");
+    }
+
     // Restore UserMaximumChargeCurrent value - via Instance (which owns the data)
     int64_t tempUserMaximumChargeCurrent;
     err = aProvider->ReadScalarValue(ConcreteAttributePath(aEndpointId, EnergyEvse::Id, Attributes::UserMaximumChargeCurrent::Id),
@@ -182,7 +223,7 @@ CHIP_ERROR EnergyEvseManager::Init()
 
     ReturnErrorOnFailure(targetsStore->Init(&Server::GetInstance().GetPersistentStorage()));
 
-    return LoadPersistentAttributes();
+    return LoadPersistentValues();
 }
 
 void EnergyEvseManager::Shutdown()

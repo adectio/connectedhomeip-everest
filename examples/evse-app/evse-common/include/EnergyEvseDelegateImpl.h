@@ -296,6 +296,8 @@ public:
     DataModel::Nullable<int64_t> GetSessionEnergyDischarged() const;
 
 private:
+    friend class EnergyEvseManager;
+
     /* Constants */
     static constexpr int kDefaultMinChargeCurrent_mA                      = 6000;  /* 6A */
     static constexpr int kDefaultUserMaximumChargeCurrent_mA              = 80000; /* 80A */

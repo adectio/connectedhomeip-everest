@@ -56,6 +56,15 @@ Status EnergyEvseDelegate::Disable()
         return Status::Failure;
     }
 
+    ReturnValueAndLogOnFailure(
+        GetSafeAttributePersistenceProvider()->WriteScalarValue(
+            ConcreteAttributePath(mEndpointId, EnergyEvse::Id, MaximumChargeCurrent::Id), int64_t(0)),
+        Status::Failure, AppServer, "Failed to persist disabled charging command current limit");
+    ReturnValueAndLogOnFailure(
+        GetSafeAttributePersistenceProvider()->WriteScalarValue(
+            ConcreteAttributePath(mEndpointId, EnergyEvse::Id, MaximumDischargeCurrent::Id), int64_t(0)),
+        Status::Failure, AppServer, "Failed to persist disabled discharging command current limit");
+
     DataModel::Nullable<uint32_t> disableTime(0);
     /* update ChargingEnabledUntil & DischargingEnabledUntil to show 0 */
     TEMPORARY_RETURN_IGNORED mInstance->SetChargingEnabledUntil(disableTime);
@@ -128,12 +137,17 @@ Status EnergyEvseDelegate::EnableCharging(const DataModel::Nullable<uint32_t> & 
         /* check chargingEnabledUntil is in the future */
         ChipLogProgress(AppServer, "Charging enabled until: %lu", static_cast<long unsigned int>(chargingEnabledUntil.Value()));
     }
+
+    ReturnValueAndLogOnFailure(
+        GetSafeAttributePersistenceProvider()->WriteScalarValue(
+            ConcreteAttributePath(mEndpointId, EnergyEvse::Id, MaximumChargeCurrent::Id), maximumChargeCurrent),
+        Status::Failure, AppServer, "Failed to persist charging command current limit");
+
     TEMPORARY_RETURN_IGNORED mInstance->SetChargingEnabledUntil(chargingEnabledUntil);
 
     /* If it looks ok, store the min & max charging current */
     mMaximumChargingCurrentLimitFromCommand = maximumChargeCurrent;
     TEMPORARY_RETURN_IGNORED mInstance->SetMinimumChargeCurrent(minimumChargeCurrent);
-    // TODO persist these to KVS
 
     ComputeMaxChargeCurrentLimit();
 
@@ -174,13 +188,17 @@ Status EnergyEvseDelegate::EnableDischarging(const DataModel::Nullable<uint32_t>
         ChipLogProgress(AppServer, "Discharging enabled until: %lu",
                         static_cast<long unsigned int>(dischargingEnabledUntil.Value()));
     }
+
+    ReturnValueAndLogOnFailure(
+        GetSafeAttributePersistenceProvider()->WriteScalarValue(
+            ConcreteAttributePath(mEndpointId, EnergyEvse::Id, MaximumDischargeCurrent::Id), maximumDischargeCurrent),
+        Status::Failure, AppServer, "Failed to persist discharging command current limit");
+
     TEMPORARY_RETURN_IGNORED mInstance->SetDischargingEnabledUntil(dischargingEnabledUntil);
 
     /* If it looks ok, store the max discharging current */
     mMaximumDischargingCurrentLimitFromCommand = maximumDischargeCurrent;
     ComputeMaxDischargeCurrentLimit();
-
-    // TODO persist these to KVS
 
     return HandleStateMachineEvent(EVSEStateMachineEvent::DischargingEnabledEvent);
 }
@@ -246,6 +264,9 @@ void EnergyEvseDelegate::HandleEnabledStateExpiration(uint32_t matterEpochSecond
 
         mMaximumChargingCurrentLimitFromCommand = 0;
         ComputeMaxChargeCurrentLimit();
+        LogErrorOnFailure(GetSafeAttributePersistenceProvider()->WriteScalarValue(
+            ConcreteAttributePath(mEndpointId, EnergyEvse::Id, MaximumChargeCurrent::Id),
+            mMaximumChargingCurrentLimitFromCommand));
 
         // Change to discharging-only if discharging is still enabled
         if (!dischargingExpired)
@@ -267,6 +288,9 @@ void EnergyEvseDelegate::HandleEnabledStateExpiration(uint32_t matterEpochSecond
         // update MaximumDischargeCurrent to 0
         mMaximumDischargingCurrentLimitFromCommand = 0;
         ComputeMaxDischargeCurrentLimit();
+        LogErrorOnFailure(GetSafeAttributePersistenceProvider()->WriteScalarValue(
+            ConcreteAttributePath(mEndpointId, EnergyEvse::Id, MaximumDischargeCurrent::Id),
+            mMaximumDischargingCurrentLimitFromCommand));
 
         // Change to charging-only if charging is still enabled
         if (!chargingExpired)
@@ -1685,6 +1709,8 @@ void EnergyEvseDelegate::OnCircuitCapacityChanged(int64_t newValue)
 void EnergyEvseDelegate::OnMinimumChargeCurrentChanged(int64_t newValue)
 {
     ChipLogDetail(AppServer, "MinimumChargeCurrent updated to %ld", static_cast<long>(newValue));
+    ConcreteAttributePath path = ConcreteAttributePath(mEndpointId, EnergyEvse::Id, MinimumChargeCurrent::Id);
+    LogErrorOnFailure(GetSafeAttributePersistenceProvider()->WriteScalarValue(path, newValue));
 }
 
 void EnergyEvseDelegate::OnMaximumChargeCurrentChanged(int64_t newValue)
