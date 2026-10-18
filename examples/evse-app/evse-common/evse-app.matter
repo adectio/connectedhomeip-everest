@@ -439,6 +439,26 @@ cluster Descriptor = 29 {
   readonly attribute int16u clusterRevision = 65533;
 }
 
+/** The Binding Cluster is meant to replace the support from the Zigbee Device Object (ZDO) for supporting the binding table. */
+cluster Binding = 30 {
+  revision 1;
+
+  fabric_scoped struct TargetStruct {
+    optional node_id node = 1;
+    optional group_id group = 2;
+    optional endpoint_no endpoint = 3;
+    optional cluster_id cluster = 4;
+    fabric_idx fabricIndex = 254;
+  }
+
+  attribute access(write: manage) TargetStruct binding[] = 0;
+  readonly attribute command_id generatedCommandList[] = 65528;
+  readonly attribute command_id acceptedCommandList[] = 65529;
+  readonly attribute attrib_id attributeList[] = 65531;
+  readonly attribute bitmap32 featureMap = 65532;
+  readonly attribute int16u clusterRevision = 65533;
+}
+
 /** The Access Control Cluster exposes a data model view of a
       Node's Access Control List (ACL), which codifies the rules used to manage
       and enforce Access Control for the Node's endpoints and their associated
@@ -2034,6 +2054,71 @@ cluster ElectricalEnergyMeasurement = 145 {
   readonly attribute int16u clusterRevision = 65533;
 }
 
+/** The Commodity Price Cluster provides the mechanism for communicating Gas, Energy, or Water pricing information within the premises. */
+provisional cluster CommodityPrice = 149 {
+  revision 4;
+
+  bitmap CommodityPriceDetailBitmap : bitmap16 {
+    kDescription = 0x1;
+    kComponents = 0x2;
+  }
+
+  bitmap Feature : bitmap32 {
+    kForecasting = 0x1;
+  }
+
+  struct CommodityPriceComponentStruct {
+    money price = 0;
+    TariffPriceTypeEnum source = 1;
+    optional char_string<32> description = 2;
+    optional int32u tariffComponentID = 3;
+  }
+
+  struct CommodityPriceStruct {
+    epoch_s periodStart = 0;
+    nullable epoch_s periodEnd = 1;
+    optional money price = 2;
+    optional int16s priceLevel = 3;
+    optional char_string<32> description = 4;
+    optional CommodityPriceComponentStruct components[] = 5;
+  }
+
+  info event PriceChange = 0 {
+    nullable CommodityPriceStruct currentPrice = 0;
+  }
+
+  readonly attribute TariffUnitEnum tariffUnit = 0;
+  readonly attribute nullable CurrencyStruct currency = 1;
+  readonly attribute nullable CommodityPriceStruct currentPrice = 2;
+  readonly attribute optional CommodityPriceStruct priceForecast[] = 3;
+  readonly attribute command_id generatedCommandList[] = 65528;
+  readonly attribute command_id acceptedCommandList[] = 65529;
+  readonly attribute attrib_id attributeList[] = 65531;
+  readonly attribute bitmap32 featureMap = 65532;
+  readonly attribute int16u clusterRevision = 65533;
+
+  request struct GetDetailedPriceRequestRequest {
+    CommodityPriceDetailBitmap details = 0;
+  }
+
+  response struct GetDetailedPriceResponse = 1 {
+    nullable CommodityPriceStruct currentPrice = 0;
+  }
+
+  request struct GetDetailedForecastRequestRequest {
+    CommodityPriceDetailBitmap details = 0;
+  }
+
+  response struct GetDetailedForecastResponse = 3 {
+    CommodityPriceStruct priceForecast[] = 0;
+  }
+
+  /** Upon receipt, this SHALL generate a GetDetailedPrice Response command. */
+  command GetDetailedPriceRequest(GetDetailedPriceRequestRequest): GetDetailedPriceResponse = 0;
+  /** Upon receipt, this SHALL generate a GetDetailedForecast Response command. */
+  command GetDetailedForecastRequest(GetDetailedForecastRequestRequest): GetDetailedForecastResponse = 2;
+}
+
 /** This cluster allows a client to manage the power draw of a device. An example of such a client could be an Energy Management System (EMS) which controls an Energy Smart Appliance (ESA). */
 cluster DeviceEnergyManagement = 152 {
   revision 5;
@@ -2609,6 +2694,43 @@ provisional cluster DeviceEnergyManagementMode = 159 {
   command ChangeToMode(ChangeToModeRequest): ChangeToModeResponse = 0;
 }
 
+/** The Electrical Grid Conditions Cluster provides the mechanism for communicating electricity grid carbon intensity to devices within the premises in units of Grams of CO2e per kWh. */
+provisional cluster ElectricalGridConditions = 160 {
+  revision 1;
+
+  enum ThreeLevelEnum : enum8 {
+    kLow = 0;
+    kMedium = 1;
+    kHigh = 2;
+  }
+
+  bitmap Feature : bitmap32 {
+    kForecasting = 0x1;
+  }
+
+  struct ElectricalGridConditionsStruct {
+    epoch_s periodStart = 0;
+    nullable epoch_s periodEnd = 1;
+    int16s gridCarbonIntensity = 2;
+    ThreeLevelEnum gridCarbonLevel = 3;
+    int16s localCarbonIntensity = 4;
+    ThreeLevelEnum localCarbonLevel = 5;
+  }
+
+  info event CurrentConditionsChanged = 0 {
+    nullable ElectricalGridConditionsStruct currentConditions = 0;
+  }
+
+  attribute nullable boolean localGenerationAvailable = 0;
+  readonly attribute nullable ElectricalGridConditionsStruct currentConditions = 1;
+  readonly attribute optional ElectricalGridConditionsStruct forecastConditions[] = 2;
+  readonly attribute command_id generatedCommandList[] = 65528;
+  readonly attribute command_id acceptedCommandList[] = 65529;
+  readonly attribute attrib_id attributeList[] = 65531;
+  readonly attribute bitmap32 featureMap = 65532;
+  readonly attribute int16u clusterRevision = 65533;
+}
+
 endpoint 0 {
   device type ma_rootdevice = 22, version 4;
   device type ma_otarequestor = 18, version 1;
@@ -2812,6 +2934,8 @@ endpoint 1 {
   device type energy_evse = 1292, version 2;
   device type device_energy_management = 1293, version 2;
 
+  binding cluster CommodityPrice;
+  binding cluster ElectricalGridConditions;
 
   server cluster Identify {
     callback attribute identifyTime;
@@ -2831,6 +2955,15 @@ endpoint 1 {
     callback attribute serverList;
     callback attribute clientList;
     callback attribute partsList;
+    callback attribute generatedCommandList;
+    callback attribute acceptedCommandList;
+    callback attribute attributeList;
+    callback attribute featureMap;
+    callback attribute clusterRevision;
+  }
+
+  server cluster Binding {
+    callback attribute binding;
     callback attribute generatedCommandList;
     callback attribute acceptedCommandList;
     callback attribute attributeList;

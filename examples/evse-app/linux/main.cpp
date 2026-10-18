@@ -25,6 +25,7 @@
 #include <lib/support/BitMask.h>
 
 #include <memory>
+#include <EvsePlugins.h>
 
 using namespace chip;
 using namespace chip::app;
@@ -119,6 +120,8 @@ void ApplicationInit()
     ChipLogDetail(AppServer, "EVSE App: ApplicationInit()");
     SuccessOrDie(IdentifyInit());
     EvseApplicationInit();
+    // Optional extensions linked in with the evse_app_plugins GN argument
+    chip::app::Clusters::EnergyEvse::InitEvsePlugins(kEvseEndpoint);
     gEverestMqttThread = std::make_unique<EverestMqttThread>(gEverestMqttConfig);
     gEverestMqttThread->Start();
 }
@@ -131,6 +134,7 @@ void ApplicationShutdown()
         gEverestMqttThread->Stop();
         gEverestMqttThread.reset();
     }
+    chip::app::Clusters::EnergyEvse::ShutdownEvsePlugins();
     EvseApplicationShutdown();
 }
 

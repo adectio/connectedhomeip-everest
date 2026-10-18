@@ -531,8 +531,11 @@ std::optional<StateEnum> ParseSessionInfoState(std::string_view state)
         { "Finished", StateEnum::kPluggedInNoDemand },
         { "FinishedEVSE", StateEnum::kPluggedInNoDemand },
         { "FinishedEV", StateEnum::kPluggedInNoDemand },
+        // HwSetState only accepts NotPluggedIn / PluggedInNoDemand / PluggedInDemand: the delegate's state
+        // machine derives PluggedInCharging from demand + SupplyState. session_info is republished periodically,
+        // so this mapping is also what resynchronises the State after chip-evse-app restarts mid-session.
         { "ChargingPausedEVSE", StateEnum::kPluggedInDemand },
-        { "Charging", StateEnum::kPluggedInCharging },
+        { "Charging", StateEnum::kPluggedInDemand },
     };
 
     const auto selector = kSessionInfoStates.find(state);
