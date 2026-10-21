@@ -35,7 +35,11 @@ namespace EnergyEvse {
 /** Matches the maximum number of slots in a Device Energy Management forecast */
 constexpr size_t kMaxChargingScheduleSlots = 10;
 
-/** Extra charging time allowed for slow starting vehicles (e.g. battery conditioning) */
+/**
+ * Spare time left between the end of the planned charging and the target, for slow starting vehicles
+ * (e.g. battery conditioning). It is not planned as extra energy, so the scheduled energy doesn't depend
+ * on the charging current.
+ */
 constexpr uint32_t kChargingLeeway_s = 15 * 60;
 
 /** Inputs for computing a charging schedule towards the next charging target */
@@ -124,7 +128,7 @@ public:
 
 /**
  * Simple optimiser that assumes a flat tariff throughout the day, so it charges at the
- * maximum current as late as possible while still reaching the target in time.
+ * maximum current as late as possible while still finishing kChargingLeeway_s before the target.
  *
  * When the energy needed is unknown it charges from now until the target time.
  */

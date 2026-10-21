@@ -60,18 +60,20 @@ CHIP_ERROR FlatTariffOptimiser::ComputeSchedule(const ChargingScheduleRequest & 
 
     // Time to charge(seconds) = (3600 * Energy(mWh) / Power(W)) / 1000
     // to avoid using floats we multiply by 36 and then divide by 10 (instead of x3600 and dividing by 1000)
-    const uint64_t chargingDuration_s =
-        (static_cast<uint64_t>(request.requiredEnergy_mWh) * 36) / (power_W * 10) + kChargingLeeway_s;
+    // (rounded up so that at least the required energy is delivered)
+    const uint64_t chargingDuration_s = (static_cast<uint64_t>(request.requiredEnergy_mWh) * 36 + power_W * 10 - 1) / (power_W * 10);
 
     const uint32_t clampedDuration_s =
         static_cast<uint32_t>(std::min<uint64_t>(chargingDuration_s, std::numeric_limits<uint32_t>::max()));
 
-    // Start as late as possible; if there isn't enough time left to reach the target, start now
-    uint32_t start_epoch_s = request.now_epoch_s;
+    // Start as late as possible while still finishing the leeway before the target (the leeway is spare time,
+    // not extra energy); if there isn't enough time left, start now
+    const uint64_t neededTime_s = chargingDuration_s + kChargingLeeway_s;
+    uint32_t start_epoch_s      = request.now_epoch_s;
     if (request.targetTime_epoch_s > request.now_epoch_s &&
-        chargingDuration_s < static_cast<uint64_t>(request.targetTime_epoch_s - request.now_epoch_s))
+        neededTime_s < static_cast<uint64_t>(request.targetTime_epoch_s - request.now_epoch_s))
     {
-        start_epoch_s = request.targetTime_epoch_s - static_cast<uint32_t>(chargingDuration_s);
+        start_epoch_s = request.targetTime_epoch_s - static_cast<uint32_t>(neededTime_s);
     }
 
     schedule.startTime_epoch_s.SetNonNull(start_epoch_s);
