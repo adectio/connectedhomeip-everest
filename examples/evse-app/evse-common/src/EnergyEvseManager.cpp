@@ -46,7 +46,7 @@ bool IsEnabledAtStartup(const chip::app::DataModel::Nullable<uint32_t> & enabled
 
 } // namespace
 
-CHIP_ERROR EnergyEvseManager::LoadPersistentAttributes()
+CHIP_ERROR EnergyEvseManager::LoadPersistentValues()
 {
 
     SafeAttributePersistenceProvider * aProvider = GetSafeAttributePersistenceProvider();
@@ -65,24 +65,15 @@ CHIP_ERROR EnergyEvseManager::LoadPersistentAttributes()
     }
 
     // Restore ChargingEnabledUntil value - via Instance (which owns the data).
-    // A fresh installation defaults to charging enabled indefinitely, while a
-    // stored zero is an explicit Disable that must persist across a restart.
+    // A fresh installation stays Disabled until an EnableCharging command is received.
     DataModel::Nullable<uint32_t> tempChargingEnabledUntil;
     err = aProvider->ReadScalarValue(ConcreteAttributePath(aEndpointId, EnergyEvse::Id, Attributes::ChargingEnabledUntil::Id),
                                      tempChargingEnabledUntil);
     bool chargingEnabledUntilStored = err == CHIP_NO_ERROR;
-    bool useDefaultChargingEnabled  = false;
     if (err == CHIP_NO_ERROR)
     {
         ChipLogDetail(AppServer, "EVSE: successfully loaded ChargingEnabledUntil from NVM");
-        TEMPORARY_RETURN_IGNORED SetChargingEnabledUntil(tempChargingEnabledUntil);
-    }
-    else if (err == CHIP_ERROR_PERSISTED_STORAGE_VALUE_NOT_FOUND)
-    {
-        tempChargingEnabledUntil = DataModel::NullNullable;
-        ReturnErrorOnFailure(SetChargingEnabledUntil(tempChargingEnabledUntil));
-        useDefaultChargingEnabled = true;
-        ChipLogProgress(AppServer, "EVSE: defaulting to charging enabled indefinitely");
+        LogErrorOnFailure(SetChargingEnabledUntil(tempChargingEnabledUntil));
     }
     else
     {
@@ -97,15 +88,14 @@ CHIP_ERROR EnergyEvseManager::LoadPersistentAttributes()
     if (err == CHIP_NO_ERROR)
     {
         ChipLogDetail(AppServer, "EVSE: successfully loaded DischargingEnabledUntil from NVM");
-        TEMPORARY_RETURN_IGNORED SetDischargingEnabledUntil(tempDischargingEnabledUntil);
+        LogErrorOnFailure(SetDischargingEnabledUntil(tempDischargingEnabledUntil));
     }
     else
     {
         ChipLogError(AppServer, "EVSE: Unable to restore persisted DischargingEnabledUntil value");
     }
 
-    const bool chargingEnabled =
-        (chargingEnabledUntilStored || useDefaultChargingEnabled) && IsEnabledAtStartup(tempChargingEnabledUntil);
+    const bool chargingEnabled    = chargingEnabledUntilStored && IsEnabledAtStartup(tempChargingEnabledUntil);
     const bool dischargingEnabled = dischargingEnabledUntilStored && IsEnabledAtStartup(tempDischargingEnabledUntil);
     if (chargingEnabled && dischargingEnabled)
     {
@@ -120,6 +110,73 @@ CHIP_ERROR EnergyEvseManager::LoadPersistentAttributes()
         ReturnErrorOnFailure(SetSupplyState(SupplyStateEnum::kDischargingEnabled));
     }
 
+    int64_t tempMinimumChargeCurrent;
+    err = aProvider->ReadScalarValue(ConcreteAttributePath(aEndpointId, EnergyEvse::Id, Attributes::MinimumChargeCurrent::Id),
+                                     tempMinimumChargeCurrent);
+    if (err == CHIP_NO_ERROR)
+    {
+        ChipLogDetail(AppServer, "EVSE: successfully loaded MinimumChargeCurrent from NVM");
+        ReturnErrorOnFailure(SetMinimumChargeCurrent(tempMinimumChargeCurrent));
+    }
+    else if (err != CHIP_ERROR_PERSISTED_STORAGE_VALUE_NOT_FOUND)
+    {
+        ChipLogError(AppServer, "EVSE: Unable to restore persisted MinimumChargeCurrent value");
+    }
+
+    // These keys hold the raw command limits, not the derived maximum-current
+    // attributes. They are written only by the enable, disable, and expiry paths.
+    int64_t maximumChargingCurrent;
+    err = aProvider->ReadScalarValue(ConcreteAttributePath(aEndpointId, EnergyEvse::Id, Attributes::MaximumChargeCurrent::Id),
+                                     maximumChargingCurrent);
+    if (err == CHIP_NO_ERROR)
+    {
+        VerifyOrReturnError(maximumChargingCurrent >= kMinimumChargeCurrentLimit, CHIP_ERROR_INVALID_ARGUMENT);
+        mDelegate->mMaximumChargingCurrentLimitFromCommand = maximumChargingCurrent;
+    }
+    else if (err != CHIP_ERROR_PERSISTED_STORAGE_VALUE_NOT_FOUND)
+    {
+        ChipLogError(AppServer, "EVSE: Unable to restore persisted charging command current limit");
+    }
+
+    int64_t maximumDischargingCurrent;
+    err = aProvider->ReadScalarValue(ConcreteAttributePath(aEndpointId, EnergyEvse::Id, Attributes::MaximumDischargeCurrent::Id),
+                                     maximumDischargingCurrent);
+    if (err == CHIP_NO_ERROR)
+    {
+        VerifyOrReturnError(maximumDischargingCurrent >= kMinimumChargeCurrentLimit, CHIP_ERROR_INVALID_ARGUMENT);
+        mDelegate->mMaximumDischargingCurrentLimitFromCommand = maximumDischargingCurrent;
+    }
+    else if (err != CHIP_ERROR_PERSISTED_STORAGE_VALUE_NOT_FOUND)
+    {
+        ChipLogError(AppServer, "EVSE: Unable to restore persisted discharging command current limit");
+    }
+
+    // A stored deadline that elapsed while the EVSE was off disables that mode, so clear its deadline and
+    // current limits rather than restoring stale values.
+    // A failed write leaves the expired deadline stored, which is restored as disabled again on the next boot.
+    const DataModel::Nullable<uint32_t> disableTime(0);
+    if (chargingEnabledUntilStored && !chargingEnabled)
+    {
+        LogErrorOnFailure(aProvider->WriteScalarValue(
+            ConcreteAttributePath(aEndpointId, EnergyEvse::Id, Attributes::ChargingEnabledUntil::Id), disableTime));
+        LogErrorOnFailure(SetChargingEnabledUntil(disableTime));
+        LogErrorOnFailure(aProvider->WriteScalarValue(
+            ConcreteAttributePath(aEndpointId, EnergyEvse::Id, Attributes::MinimumChargeCurrent::Id), int64_t(0)));
+        LogErrorOnFailure(SetMinimumChargeCurrent(0));
+        mDelegate->mMaximumChargingCurrentLimitFromCommand = 0;
+        LogErrorOnFailure(aProvider->WriteScalarValue(
+            ConcreteAttributePath(aEndpointId, EnergyEvse::Id, Attributes::MaximumChargeCurrent::Id), int64_t(0)));
+    }
+    if (dischargingEnabledUntilStored && !dischargingEnabled)
+    {
+        LogErrorOnFailure(aProvider->WriteScalarValue(
+            ConcreteAttributePath(aEndpointId, EnergyEvse::Id, Attributes::DischargingEnabledUntil::Id), disableTime));
+        LogErrorOnFailure(SetDischargingEnabledUntil(disableTime));
+        mDelegate->mMaximumDischargingCurrentLimitFromCommand = 0;
+        LogErrorOnFailure(aProvider->WriteScalarValue(
+            ConcreteAttributePath(aEndpointId, EnergyEvse::Id, Attributes::MaximumDischargeCurrent::Id), int64_t(0)));
+    }
+
     // Restore UserMaximumChargeCurrent value - via Instance (which owns the data)
     int64_t tempUserMaximumChargeCurrent;
     err = aProvider->ReadScalarValue(ConcreteAttributePath(aEndpointId, EnergyEvse::Id, Attributes::UserMaximumChargeCurrent::Id),
@@ -127,7 +184,11 @@ CHIP_ERROR EnergyEvseManager::LoadPersistentAttributes()
     if (err == CHIP_NO_ERROR)
     {
         ChipLogDetail(AppServer, "EVSE: successfully loaded UserMaximumChargeCurrent from NVM");
-        TEMPORARY_RETURN_IGNORED SetUserMaximumChargeCurrent(tempUserMaximumChargeCurrent);
+        LogErrorOnFailure(SetUserMaximumChargeCurrent(tempUserMaximumChargeCurrent));
+    }
+    else if (err == CHIP_ERROR_PERSISTED_STORAGE_VALUE_NOT_FOUND)
+    {
+        ReturnErrorOnFailure(mDelegate->InitializeUserMaximumChargeCurrent());
     }
     else
     {
@@ -141,7 +202,7 @@ CHIP_ERROR EnergyEvseManager::LoadPersistentAttributes()
     if (err == CHIP_NO_ERROR)
     {
         ChipLogDetail(AppServer, "EVSE: successfully loaded RandomizationDelayWindow from NVM");
-        TEMPORARY_RETURN_IGNORED SetRandomizationDelayWindow(tempRandomizationDelayWindow);
+        LogErrorOnFailure(SetRandomizationDelayWindow(tempRandomizationDelayWindow));
     }
     else
     {
@@ -155,12 +216,16 @@ CHIP_ERROR EnergyEvseManager::LoadPersistentAttributes()
     if (err == CHIP_NO_ERROR)
     {
         ChipLogDetail(AppServer, "EVSE: successfully loaded ApproximateEVEfficiency from NVM");
-        TEMPORARY_RETURN_IGNORED SetApproximateEVEfficiency(tempApproxEVEfficiency);
+        LogErrorOnFailure(SetApproximateEVEfficiency(tempApproxEVEfficiency));
     }
     else
     {
         ChipLogError(AppServer, "EVSE: Unable to restore persisted ApproximateEVEfficiency value");
     }
+
+    // The restored command limits are only applied once the effective limits are recomputed
+    mDelegate->ComputeMaxChargeCurrentLimit();
+    mDelegate->ComputeMaxDischargeCurrentLimit();
 
     return CHIP_NO_ERROR; // It is ok to have no value loaded here
 }
@@ -169,16 +234,31 @@ CHIP_ERROR EnergyEvseManager::Init()
 {
     ReturnErrorOnFailure(Instance::Init());
 
+    // The cluster is now registered, so every failure below must call Shutdown() to unregister it,
+    // as the caller destroys this object on failure.
+
     // Set up the EnergyEvseTargetsStore and persistent storage delegate
     EnergyEvseDelegate * dg = GetDelegate();
-    VerifyOrReturnLogError(dg != nullptr, CHIP_ERROR_UNINITIALIZED);
+    if (dg == nullptr)
+    {
+        ChipLogError(AppServer, "EVSE: no delegate");
+        Shutdown();
+        return CHIP_ERROR_UNINITIALIZED;
+    }
+    dg->SetInstance(this);
 
     EvseTargetsDelegate * targetsStore = dg->GetEvseTargetsDelegate();
-    VerifyOrReturnLogError(targetsStore != nullptr, CHIP_ERROR_UNINITIALIZED);
+    if (targetsStore == nullptr)
+    {
+        ChipLogError(AppServer, "EVSE: no targets delegate");
+        Shutdown();
+        return CHIP_ERROR_UNINITIALIZED;
+    }
 
-    ReturnErrorOnFailure(targetsStore->Init(&Server::GetInstance().GetPersistentStorage()));
+    ReturnErrorOnFailure(targetsStore->Init(&Server::GetInstance().GetPersistentStorage()), Shutdown());
+    ReturnErrorOnFailure(LoadPersistentValues(), Shutdown());
 
-    return LoadPersistentAttributes();
+    return CHIP_NO_ERROR;
 }
 
 void EnergyEvseManager::Shutdown()
@@ -186,6 +266,9 @@ void EnergyEvseManager::Shutdown()
     EnergyEvseDelegate * dg = GetDelegate();
     if (dg)
     {
+        // A pending enable deadline timer would otherwise fire with no instance linked
+        dg->CancelActiveTimers();
+        dg->SetInstance(nullptr);
         EvseTargetsDelegate * targetsStore = dg->GetEvseTargetsDelegate();
         if (targetsStore)
         {
