@@ -18,6 +18,7 @@
 
 #pragma once
 
+#include <ChargingScheduleOptimiser.h>
 #include <DEMManufacturerDelegate.h>
 #include <DeviceEnergyManagementManager.h>
 #include <ElectricalSensorManager.h>
@@ -144,8 +145,33 @@ public:
     /**
      * @brief   Simple example to demonstrate how an EVSE can compute the start time
      *          and duration of a charging schedule
+     *
+     *          Can be called again whenever an input to the optimiser changes (e.g. a new tariff).
      */
     CHIP_ERROR ComputeChargingSchedule();
+
+    /**
+     * @brief   Replace the charging schedule optimiser (defaults to a FlatTariffOptimiser).
+     *          Passing nullptr restores the default. The optimiser must outlive this object
+     *          or be replaced before it is destroyed.
+     */
+    void SetChargingScheduleOptimiser(ChargingScheduleOptimiser * optimiser)
+    {
+        mOptimiser = (optimiser != nullptr) ? optimiser : &mFlatTariffOptimiser;
+    }
+
+    /**
+     * @brief   The schedule produced by the most recent ComputeChargingSchedule call
+     */
+    const ChargingSchedule & GetChargingSchedule() const { return mChargingSchedule; }
+
+    /**
+     * @brief   Publish the current charging schedule as the Device Energy Management Forecast
+     *          (or a null Forecast if no charging is planned)
+     *
+     * @param   targetTime_epoch_s - the charging target the schedule must complete by, if any
+     */
+    CHIP_ERROR UpdateForecast(const DataModel::Nullable<uint32_t> & targetTime_epoch_s);
 
     /**
      * @brief   Allows a client application to initialise the Accuracy, Measurement types etc
@@ -207,6 +233,18 @@ private:
 
     int64_t mLastChargingEnergyMeter    = 0;
     int64_t mLastDischargingEnergyMeter = 0;
+
+    FlatTariffOptimiser mFlatTariffOptimiser;
+    ChargingScheduleOptimiser * mOptimiser = &mFlatTariffOptimiser;
+    ChargingSchedule mChargingSchedule;
+
+    // The DEM Forecast references these slots, so they must live as long as the forecast does
+    std::array<DeviceEnergyManagement::Structs::SlotStruct::Type, kMaxChargingScheduleSlots> mForecastSlots;
+    // Financial and GHG emission costs of each slot, referenced by mForecastSlots
+    static constexpr size_t kMaxCostsPerSlot = 2;
+    std::array<std::array<DeviceEnergyManagement::Structs::CostStruct::Type, kMaxCostsPerSlot>, kMaxChargingScheduleSlots>
+        mForecastCosts;
+    uint32_t mForecastId = 0;
 };
 
 /** @brief Helper function to return the singleton EVSEManufacturer instance

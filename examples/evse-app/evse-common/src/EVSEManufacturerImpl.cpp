@@ -31,6 +31,7 @@
 #include <app/clusters/energy-evse-server/EnergyEvseTestEventTriggerHandler.h>
 #include <app/clusters/power-source-server/power-source-server.h>
 #include <app/server/Server.h>
+#include <lib/support/SafeInt.h>
 
 #include <app-common/zap-generated/attributes/Accessors.h>
 #include <protocols/interaction_model/StatusCode.h>
@@ -283,60 +284,36 @@ CHIP_ERROR EVSEManufacturer::DetermineRequiredEnergy(EnergyEvseDelegate * dg, in
 /**
  * @brief   Compute the start time based on required energy
  *
- *  Simple optimizer - assume a flat tariff throughout the day
+ *  Delegates to the configured ChargingScheduleOptimiser (a flat tariff by default)
  */
 CHIP_ERROR EVSEManufacturer::ComputeStartTime(EnergyEvseDelegate * dg, DataModel::Nullable<uint32_t> & startTime_epoch_s,
                                               uint32_t targetTime_epoch_s, uint32_t now_epoch_s, int64_t requiredEnergy_mWh)
 {
+    ChargingScheduleRequest request;
+    request.now_epoch_s             = now_epoch_s;
+    request.targetTime_epoch_s      = targetTime_epoch_s;
+    request.requiredEnergy_mWh      = requiredEnergy_mWh;
+    request.nominalVoltage_mV       = dg->HwGetNominalMainsVoltage();
+    request.minimumChargeCurrent_mA = dg->GetMinimumChargeCurrent();
+    request.maximumChargeCurrent_mA = dg->GetMaximumChargeCurrent();
+    request.chargeUntilFull         = (requiredEnergy_mWh >= kMaxRequiredEnergy_mWh);
 
-    uint32_t chargingDuration_s;
-    uint32_t tempStartTime_epoch_s;
-
-    if (requiredEnergy_mWh == 0)
+    CHIP_ERROR err = mOptimiser->ComputeSchedule(request, mChargingSchedule);
+    if (err != CHIP_NO_ERROR)
     {
-        // If we don't need to charge, then ensure we do not set a NextStartTime
-        // (spec says this should be NULL if we don't plan to schedule a charge)
-        startTime_epoch_s.SetNull();
-        return CHIP_NO_ERROR;
+        mChargingSchedule.Clear();
     }
+    startTime_epoch_s = mChargingSchedule.startTime_epoch_s;
 
-    // Compute power from nominal voltage and maxChargingRate
-    // GetMaximumChargeCurrent returns mA, but to help avoid overflow
-    // We use V (not mV) and compute power to the nearest Watt
-    uint32_t power_W = static_cast<uint32_t>((dg->HwGetNominalMainsVoltage() * dg->GetMaximumChargeCurrent()) / 1000000);
-    if (power_W == 0)
+    // TODO have a periodic timer which turns the charger on/off (and adjusts the current) per schedule slot
+    for (size_t i = 0; i < mChargingSchedule.slotCount; i++)
     {
-        ChipLogError(AppServer, "EVSE Error: MaxCurrent = 0Amp - Can't schedule charging");
-        startTime_epoch_s.SetNull();
-        return CHIP_ERROR_INTERNAL;
+        const ChargingScheduleSlot & slot = mChargingSchedule.slots[i];
+        ChipLogProgress(AppServer, "EVSE schedule slot %u: start %lu for %lus at %ld mA", static_cast<unsigned>(i),
+                        static_cast<unsigned long>(slot.start_epoch_s), static_cast<unsigned long>(slot.duration_s),
+                        static_cast<long>(slot.chargeCurrent_mA));
     }
-
-    // Time to charge(seconds) = (3600 * Energy(mWh) / Power(W)) / 1000
-    // to avoid using floats we multiply by 36 and then divide by 10 (instead of x3600 and dividing by 1000)
-    chargingDuration_s =
-        static_cast<uint32_t>((static_cast<uint64_t>(requiredEnergy_mWh) * 36) / (static_cast<uint64_t>(power_W) * 10));
-
-    // Add in 15 minutes leeway to account for slow starting vehicles
-    // that need to condition the battery or if it is cold etc
-    chargingDuration_s += (15 * 60);
-
-    // A price optimizer can look for cheapest time of day
-    // However for now we'll start charging as late as possible
-    tempStartTime_epoch_s = targetTime_epoch_s - chargingDuration_s;
-
-    if (tempStartTime_epoch_s < now_epoch_s)
-    {
-        // we need to turn on the EVSE now - it won't have enough time to reach the target
-        startTime_epoch_s.SetNonNull(now_epoch_s);
-        // TODO call function to turn on the EV
-    }
-    else
-    {
-        // we turn off the EVSE for now
-        startTime_epoch_s.SetNonNull(tempStartTime_epoch_s);
-        // TODO have a periodic timer which checks if we should turn on the charger now
-    }
-    return CHIP_NO_ERROR;
+    return err;
 }
 
 /**
@@ -378,6 +355,7 @@ CHIP_ERROR EVSEManufacturer::ComputeChargingSchedule()
     targetSoC.SetNull();
     targetAddedEnergy_mWh.SetNull();
     startTime_epoch_s.SetNull(); // If we FindNextTarget this will be computed below and set to a non null value
+    mChargingSchedule.Clear();
 
     /* We can only compute charging schedules if the EV is plugged in and the charging is enabled
      * so we know the charging current - i.e. can get the max power, and therefore can calculate
@@ -430,7 +408,139 @@ CHIP_ERROR EVSEManufacturer::ComputeChargingSchedule()
     TEMPORARY_RETURN_IGNORED instance->SetNextChargeRequiredEnergy(targetAddedEnergy_mWh);
     TEMPORARY_RETURN_IGNORED instance->SetNextChargeTargetSoC(targetSoC);
 
+    LogErrorOnFailure(UpdateForecast(targetTime_epoch_s));
+
     return err;
+}
+
+CHIP_ERROR EVSEManufacturer::UpdateForecast(const DataModel::Nullable<uint32_t> & targetTime_epoch_s)
+{
+    DeviceEnergyManagementDelegate * dem = GetDEMDelegate();
+    VerifyOrReturnError(dem != nullptr, CHIP_ERROR_UNINITIALIZED);
+
+    EnergyEvseDelegate * dg = GetEvseDelegate();
+    VerifyOrReturnError(dg != nullptr, CHIP_ERROR_UNINITIALIZED);
+
+    const ChargingSchedule & schedule = mChargingSchedule;
+    if (schedule.startTime_epoch_s.IsNull() || schedule.slotCount == 0)
+    {
+        return dem->SetForecast(DataModel::NullNullable);
+    }
+
+    uint32_t now_epoch_s = 0;
+    ReturnErrorOnFailure(System::Clock::GetClock_MatterEpochS(now_epoch_s));
+
+    const bool powerForecast  = dem->HasFeature(DeviceEnergyManagement::Feature::kPowerForecastReporting);
+    const bool pausable       = dem->HasFeature(DeviceEnergyManagement::Feature::kPausable);
+    const bool adjustable     = dem->HasFeature(DeviceEnergyManagement::Feature::kForecastAdjustment);
+    const int64_t voltage_mV  = dg->HwGetNominalMainsVoltage();
+    const int64_t minPower_mW = (dg->GetMinimumChargeCurrent() * voltage_mV) / 1000;
+    const int64_t maxPower_mW = (dg->GetMaximumChargeCurrent() * voltage_mV) / 1000;
+
+    DataModel::Nullable<uint16_t> activeSlotNumber;
+    uint32_t endTime_epoch_s = schedule.startTime_epoch_s.Value();
+
+    for (size_t i = 0; i < schedule.slotCount; i++)
+    {
+        const ChargingScheduleSlot & chargingSlot          = schedule.slots[i];
+        DeviceEnergyManagement::Structs::SlotStruct::Type & slot = mForecastSlots[i];
+        const bool charging                                = chargingSlot.chargeCurrent_mA > 0;
+
+        slot = {};
+        // The schedule is replanned rather than stretched, so each slot has a fixed duration
+        slot.minDuration       = chargingSlot.duration_s;
+        slot.maxDuration       = chargingSlot.duration_s;
+        slot.defaultDuration   = chargingSlot.duration_s;
+        slot.elapsedSlotTime   = 0;
+        slot.remainingSlotTime = chargingSlot.duration_s;
+
+        const uint32_t slotEnd_epoch_s = chargingSlot.start_epoch_s + chargingSlot.duration_s;
+        if (chargingSlot.start_epoch_s <= now_epoch_s && now_epoch_s < slotEnd_epoch_s)
+        {
+            activeSlotNumber.SetNonNull(static_cast<uint16_t>(i));
+            slot.elapsedSlotTime   = now_epoch_s - chargingSlot.start_epoch_s;
+            slot.remainingSlotTime = slotEnd_epoch_s - now_epoch_s;
+        }
+        endTime_epoch_s = slotEnd_epoch_s;
+
+        if (pausable)
+        {
+            slot.slotIsPausable.SetValue(charging);
+            if (charging)
+            {
+                slot.minPauseDuration.SetValue(60);
+                slot.maxPauseDuration.SetValue(chargingSlot.duration_s);
+            }
+        }
+
+        // Costs are only known when the optimiser has tariff / grid carbon data
+        auto & costs     = mForecastCosts[i];
+        size_t costCount = 0;
+        if (chargingSlot.financialCost.has_value() &&
+            CanCastTo<int32_t>(chargingSlot.financialCost->value))
+        {
+            costs[costCount]               = {};
+            costs[costCount].costType      = DeviceEnergyManagement::CostTypeEnum::kFinancial;
+            costs[costCount].value         = static_cast<int32_t>(chargingSlot.financialCost->value);
+            costs[costCount].decimalPoints = chargingSlot.financialCost->decimalPoints;
+            costs[costCount].currency.SetValue(chargingSlot.financialCost->currency);
+            costCount++;
+        }
+        if (chargingSlot.ghgEmissions_g.has_value() && CanCastTo<int32_t>(chargingSlot.ghgEmissions_g.value()))
+        {
+            costs[costCount]               = {};
+            costs[costCount].costType      = DeviceEnergyManagement::CostTypeEnum::kGHGEmissions;
+            costs[costCount].value         = static_cast<int32_t>(chargingSlot.ghgEmissions_g.value());
+            costs[costCount].decimalPoints = 0;
+            costCount++;
+        }
+        if (costCount > 0)
+        {
+            slot.costs.SetValue(
+                DataModel::List<const DeviceEnergyManagement::Structs::CostStruct::Type>(costs.data(), costCount));
+        }
+
+        if (powerForecast)
+        {
+            slot.nominalPower.SetValue(chargingSlot.power_mW);
+            slot.minPower.SetValue(charging ? minPower_mW : 0);
+            slot.maxPower.SetValue(charging ? maxPower_mW : 0);
+            slot.nominalEnergy.SetValue((chargingSlot.power_mW * chargingSlot.duration_s) / 3600);
+
+            if (adjustable && charging)
+            {
+                slot.minPowerAdjustment.SetValue(minPower_mW);
+                slot.maxPowerAdjustment.SetValue(maxPower_mW);
+                slot.minDurationAdjustment.SetValue(chargingSlot.duration_s);
+                slot.maxDurationAdjustment.SetValue(chargingSlot.duration_s);
+            }
+        }
+    }
+
+    DeviceEnergyManagement::Structs::ForecastStruct::Type forecast;
+    // ForecastID must change with every new forecast; the DEM delegate also increments it on adjustments
+    const auto & currentForecast = dem->GetForecast();
+    if (!currentForecast.IsNull())
+    {
+        mForecastId = std::max(mForecastId, currentForecast.Value().forecastID);
+    }
+    forecast.forecastID       = ++mForecastId;
+    forecast.activeSlotNumber = activeSlotNumber;
+    forecast.startTime        = schedule.startTime_epoch_s.Value();
+    forecast.endTime          = endTime_epoch_s;
+    forecast.isPausable       = pausable;
+    // Planned by the EVSE itself (rather than by a local or grid energy manager)
+    forecast.forecastUpdateReason = DeviceEnergyManagement::ForecastUpdateReasonEnum::kInternalOptimization;
+    if (dem->HasFeature(DeviceEnergyManagement::Feature::kStartTimeAdjustment))
+    {
+        forecast.earliestStartTime.SetValue(DataModel::Nullable<uint32_t>(now_epoch_s));
+        forecast.latestEndTime.SetValue(targetTime_epoch_s.IsNull() ? endTime_epoch_s
+                                                                    : std::max(endTime_epoch_s, targetTime_epoch_s.Value()));
+    }
+    forecast.slots = DataModel::List<const DeviceEnergyManagement::Structs::SlotStruct::Type>(mForecastSlots.data(),
+                                                                                               schedule.slotCount);
+
+    return dem->SetForecast(DataModel::MakeNullable(forecast));
 }
 
 /**

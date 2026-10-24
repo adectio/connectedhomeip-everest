@@ -21,11 +21,16 @@
 #include <app/server/Server.h>
 #include <platform/CHIPDeviceLayer.h>
 
+#include <limits>
+
 using namespace chip::app;
 using namespace chip::app::Clusters;
 using namespace chip::app::Clusters::EnergyEvse;
 
 namespace {
+
+/** EVs will not charge below 6A, so a smaller command limit can't be a real charging limit */
+constexpr int64_t kMinimumEvChargeCurrent_mA = 6000;
 
 bool IsEnabledAtStartup(const chip::app::DataModel::Nullable<uint32_t> & enabledUntil)
 {
@@ -137,6 +142,16 @@ CHIP_ERROR EnergyEvseManager::LoadPersistentValues()
     {
         ChipLogError(AppServer, "EVSE: Unable to restore persisted charging command current limit");
     }
+
+    // Charging can be restored as enabled (including the default of enabled indefinitely) without a usable
+    // limit from an EnableCharging command, e.g. after a previous Disable persisted 0. Leaving it at 0 would
+    // make MaximumChargeCurrent 0 while charging is enabled, so defer to the hardware, circuit, cable and user limits.
+    if (chargingEnabled && mDelegate->mMaximumChargingCurrentLimitFromCommand < kMinimumEvChargeCurrent_mA)
+    {
+        ChipLogProgress(AppServer, "EVSE: charging enabled at startup without a command current limit - not restricting it");
+        mDelegate->mMaximumChargingCurrentLimitFromCommand = std::numeric_limits<int64_t>::max();
+    }
+    TEMPORARY_RETURN_IGNORED mDelegate->ComputeMaxChargeCurrentLimit();
 
     int64_t maximumDischargingCurrent;
     err = aProvider->ReadScalarValue(ConcreteAttributePath(aEndpointId, EnergyEvse::Id, Attributes::MaximumDischargeCurrent::Id),

@@ -41,7 +41,13 @@ source_set("evse-charging-targets-lib") {
 # Application mode delegate; requires evse-common chip_data_model for
 # ModeBase::Instance (CodegenIntegration.cpp from mode-base-server cluster).
 source_set("evse-common-lib") {
-  sources = [ "src/energy-evse-mode.cpp" ]
+  sources = [
+    "include/ChargingScheduleOptimiser.h",
+    "include/EvsePlugins.h",
+    "src/EvsePlugins.cpp",
+    "src/FlatTariffOptimiser.cpp",
+    "src/energy-evse-mode.cpp",
+  ]
 
   public_configs = [ ":config" ]
 
