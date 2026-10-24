@@ -20,6 +20,7 @@
 
 #include <EverestEvseManagerApiTopics.h>
 #include <EverestFaultMapping.h>
+#include <EvseStateObserver.h>
 
 #include <atomic>
 #include <chrono>
@@ -36,7 +37,7 @@
 
 struct mosquitto;
 
-class EverestMqttThread
+class EverestMqttThread : public chip::app::Clusters::EnergyEvse::EvseStateObserver
 {
 public:
     struct Config
@@ -67,9 +68,9 @@ public:
     void RequestReconnect();
 
     ConnectionState GetConnectionState() const;
-    void HandleMatterStateChange(chip::app::Clusters::EnergyEvse::StateEnum state,
-                                 chip::app::Clusters::EnergyEvse::SupplyStateEnum supplyState);
-    void HandleMatterMaximumChargeCurrentChange(int64_t maximumChargeCurrent);
+    void OnStateChanged(chip::app::Clusters::EnergyEvse::StateEnum state,
+                        chip::app::Clusters::EnergyEvse::SupplyStateEnum supplyState) override;
+    void OnMaximumChargeCurrentChanged(int64_t maximumChargeCurrent) override;
 
 private:
     enum class CommandSelector
@@ -185,5 +186,3 @@ private:
     std::condition_variable mCommandCondition;
     std::unordered_map<std::string, PendingCommand> mPendingCommands;
 };
-
-EverestMqttThread * GetEverestMqttThread();

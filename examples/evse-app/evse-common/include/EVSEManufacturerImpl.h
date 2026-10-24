@@ -23,6 +23,7 @@
 #include <DeviceEnergyManagementManager.h>
 #include <ElectricalSensorManager.h>
 #include <EnergyEvseManager.h>
+#include <EvseStateObserver.h>
 
 using chip::Protocols::InteractionModel::Status;
 namespace chip {
@@ -161,6 +162,12 @@ public:
     }
 
     /**
+     * @brief   Set the observer notified of EVSE changes made through Matter, or nullptr to clear it.
+     *          The observer must stay valid until it is cleared or this object is destroyed.
+     */
+    void SetStateObserver(EvseStateObserver * observer) { mStateObserver = observer; }
+
+    /**
      * @brief   The schedule produced by the most recent ComputeChargingSchedule call
      */
     const ChargingSchedule & GetChargingSchedule() const { return mChargingSchedule; }
@@ -236,6 +243,7 @@ private:
 
     FlatTariffOptimiser mFlatTariffOptimiser;
     ChargingScheduleOptimiser * mOptimiser = &mFlatTariffOptimiser;
+    EvseStateObserver * mStateObserver     = nullptr;
     ChargingSchedule mChargingSchedule;
 
     // The DEM Forecast references these slots, so they must live as long as the forecast does

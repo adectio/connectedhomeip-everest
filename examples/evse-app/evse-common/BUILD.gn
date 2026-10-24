@@ -44,6 +44,7 @@ source_set("evse-common-lib") {
   sources = [
     "include/ChargingScheduleOptimiser.h",
     "include/EvsePlugins.h",
+    "include/EvseStateObserver.h",
     "src/EvsePlugins.cpp",
     "src/FlatTariffOptimiser.cpp",
     "src/energy-evse-mode.cpp",
