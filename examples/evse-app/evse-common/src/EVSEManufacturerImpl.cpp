@@ -321,7 +321,7 @@ CHIP_ERROR EVSEManufacturer::ComputeStartTime(EnergyEvseDelegate * dg, DataModel
  */
 CHIP_ERROR EVSEManufacturer::ComputeChargingSchedule()
 {
-    CHIP_ERROR err;
+    CHIP_ERROR err = CHIP_NO_ERROR;
     EVSEManufacturer * mn = GetEvseManufacturer();
     VerifyOrReturnError(mn != nullptr, CHIP_ERROR_UNINITIALIZED);
 
