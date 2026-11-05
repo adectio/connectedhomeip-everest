@@ -22,7 +22,7 @@
 # test-runner-runs:
 #   run1:
 #     app: ${ALL_DEVICES_APP}
-#     app-args: --device contact-sensor --discriminator 1234 --KVS kvs1
+#     app-args: --device "*" --groupcast --discriminator 1234 --KVS kvs1
 #     script-args: >
 #       --storage-path admin_storage.json
 #       --commissioning-method on-network
@@ -31,6 +31,7 @@
 #       --trace-to json:${TRACE_TEST_JSON}.json
 #       --trace-to perfetto:${TRACE_TEST_PERFETTO}.perfetto
 #       --PICS src/app/tests/suites/certification/ci-pics-values
+#       --enable-spec-errata-ci-only-disallowed-for-certification
 #     factory-reset: true
 #     quiet: true
 # === END CI TEST ARGUMENTS ===
