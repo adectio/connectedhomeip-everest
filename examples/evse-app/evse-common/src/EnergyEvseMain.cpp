@@ -29,8 +29,10 @@
 
 #include <app-common/zap-generated/ids/Attributes.h>
 #include <app-common/zap-generated/ids/Clusters.h>
+#include <app/clusters/bindings/BindingManager.h>
 #include <app/data-model/Nullable.h>
 #include <app/server/Server.h>
+#include <platform/CHIPDeviceLayer.h>
 #include <lib/support/CodeUtils.h>
 #include <lib/support/logging/CHIPLogging.h>
 
@@ -300,12 +302,35 @@ EVSEManufacturer * EnergyEvse::GetEvseManufacturer()
     return gEvseManufacturer.get();
 }
 
+namespace {
+
+/**
+ * The Binding cluster (used to bind the EVSE to CommodityPrice / ElectricalGridConditions servers) persists its
+ * entries through the Binding::Manager, which the application must initialise. Without this, writing the Binding
+ * attribute dereferences the binding table's unset storage and crashes.
+ */
+void InitBindingManager(intptr_t)
+{
+    Server & server = Server::GetInstance();
+    Binding::ManagerInitParams params;
+    params.mFabricTable        = &server.GetFabricTable();
+    params.mCASESessionManager = server.GetCASESessionManager();
+    params.mStorage            = &server.GetPersistentStorage();
+    // Bound clusters are consumed via subscriptions, which establish their own sessions
+    params.mEstablishConnectionOnInit = false;
+    LogErrorOnFailure(Binding::Manager::GetInstance().Init(params));
+}
+
+} // namespace
+
 void EvseApplicationInit()
 {
     auto endpointId = GetEnergyDeviceEndpointId();
     VerifyOrDie(EnergyManagementCommonClustersInit(endpointId) == CHIP_NO_ERROR);
     VerifyOrDie(EnergyEvseInit(endpointId) == CHIP_NO_ERROR);
     VerifyOrDie(EVSEManufacturerInit(endpointId) == CHIP_NO_ERROR);
+    // Runs on the Matter thread before anything else scheduled later during init (e.g. reading the binding table)
+    VerifyOrDie(DeviceLayer::PlatformMgr().ScheduleWork(InitBindingManager) == CHIP_NO_ERROR);
 }
 
 void EvseApplicationShutdown()
