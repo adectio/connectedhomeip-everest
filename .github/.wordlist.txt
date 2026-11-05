@@ -39,8 +39,8 @@ aef
 AES
 AFL
 AIDL
-aliased
 algs
+aliased
 alloc
 allocator
 allocators
@@ -50,6 +50,7 @@ amebad
 amebaiot
 AmebaZ
 amebaz2
+AMOLED
 ANC
 announcementReason
 AnnounceOTAProvider
@@ -125,6 +126,7 @@ AYNJV
 babaf
 backend
 backends
+backlight
 backticks
 backtrace
 backwards
@@ -178,6 +180,7 @@ BroadcastReceiver
 BromateConcentrationMeasurement
 BromodichloromethaneConcentrationMeasurement
 BromoformConcentrationMeasurement
+BSP
 bt
 btmgmt
 BTN
@@ -193,9 +196,9 @@ bz
 bzip
 CACACACA
 cacerts
+CAfile
 callsite
 callsites
-CAfile
 cancelled
 capacitive
 CarbonDioxideConcentrationMeasurement
@@ -268,6 +271,7 @@ ClusterName
 ClusterObjectTests
 ClusterRevision
 ClusterTestGeneration
+ClosureControl
 CMAC
 cmake
 CMakeLists
@@ -280,10 +284,12 @@ COAP
 codeaurora
 codebase
 codec
+Codecov
 codegen
 CodeGenerator
 CodeLab
 codelabs
+CodeQL
 ColorControl
 Combinators
 Comcast
@@ -317,10 +323,11 @@ connstring
 conntype
 const
 ContentApp
-ContentAppPlatform
 ContentApp's
+ContentAppPlatform
 ContentLaunch
 ContentLauncher
+ContentQueueing
 contrib
 controllee
 conv
@@ -416,6 +423,7 @@ dereferencing
 desc
 descheduled
 destructor
+destructors
 detokenization
 detokenizer
 dev
@@ -436,6 +444,7 @@ DeviceNetworkProvisioningDelegate
 DeviceNetworkProvisioningDelegateImpl
 DevicePairingDelegate
 DeviceTemperatureConfiguration
+devicetree
 Devkit
 DevKitC
 DevKitM
@@ -540,6 +549,7 @@ endian
 EndpointId
 eno
 entrypoint
+Entrypoints
 enum
 Enums
 env
@@ -648,6 +658,7 @@ generalised
 GenericConfigurationManagerImpl
 GenericConnectivityManagerImpl
 GenericImpl
+Genericity
 GenericPlatformManagerImpl
 GenericThreadConfigurationManagerImpl
 GenericThreadStackManagerImpl
@@ -678,6 +689,7 @@ googleapis
 googlesource
 GPG
 GPIO
+GPIOs
 GPL
 GPLv
 Gradle
@@ -695,6 +707,7 @@ gz
 gzbf
 HaloaceticAcidsConcentrationMeasurement
 HandleCommand
+Hardcode
 hardcoded
 hardcodes
 hardknott
@@ -833,6 +846,7 @@ kDacPublicKey
 KeypadInput
 keypair
 keyset
+keystore
 kGroup
 kInvalidCommandId
 KitProg
@@ -880,6 +894,7 @@ libTransportLayer
 libudev
 libwebkitgtk
 lifecycle
+lifecycles
 lightbulb
 lightin
 LightingApp
@@ -985,6 +1000,7 @@ minLength
 MinRtrAdvInterval
 minValue
 mkdir
+mixins
 mlan
 MLD
 mmevk
@@ -994,6 +1010,7 @@ Mockito
 ModeSelect
 modprobe
 Modustoolbox
+Mosaico
 moveMode
 MoveToHue
 MoveToLevel
@@ -1130,6 +1147,7 @@ otatesting
 otaURL
 OTBR
 otcli
+OTG
 OU
 outform
 outgoingCommands
@@ -1187,10 +1205,11 @@ plaintext
 PlatformManager
 PlatformManagerImpl
 plt
-Pm1ConcentrationMeasurement
-Pm10ConcentrationMeasurement
-Pm25ConcentrationMeasurement
+pluggable
 PluginServerCallback
+Pm10ConcentrationMeasurement
+Pm1ConcentrationMeasurement
+Pm25ConcentrationMeasurement
 png
 Podman
 PollControl
@@ -1215,6 +1234,8 @@ ProductID
 ProductLabel
 ProductName
 ProductURL
+programmatically
+proguard
 proto
 protobuf
 protos
@@ -1265,8 +1286,8 @@ QueryImageResponse
 queryImageStatus
 Quickstart
 qvCHIP
-RADVD
 RadonConcentrationMeasurement
+RADVD
 raspberryPi
 RasPi
 rAv
@@ -1291,13 +1312,14 @@ recurse
 refrigeratoralarm
 regen
 registerAttributeAccessOverride
-registration
 RegisterCommandHandler
-registry
+registration
 registrations
+registry
 RelativeHumidityMeasurement
 RemainAfterExit
 remoteDeviceId
+renderer
 Rendez
 RendezvousInformation
 RendezvousParameters
@@ -1307,17 +1329,19 @@ repo
 repos
 req
 Requestor
-RequestorCanConsent
 Requestor's
+RequestorCanConsent
 Requestors
 responder
 RestrictedEvent
+resync
 retargeting
 reusability
 reviwed
 rfid
 rfids
 RGB
+ripgrep
 riscv
 rloc
 rmw
@@ -1367,13 +1391,14 @@ scm
 sco
 scp
 ScriptBinding
+scrollbar
 SDA
 SDB
 SDC
 SDHC
 SDK
-sdkconfig
 SDK's
+sdkconfig
 SDKs
 SDKTARGETSYSROOT
 sdl
@@ -1396,6 +1421,7 @@ SetOTADownloader
 SetOtaRequestorDriver
 setpin
 setpoint
+setpoints
 SetpointRaiseLower
 SetRequestorInstance
 SetUpPINCode
@@ -1464,6 +1490,7 @@ strcpy
 struct
 structs
 su
+subclasses
 Subclassing
 subcommand
 subcommands
@@ -1471,9 +1498,11 @@ subdirectories
 subdirectory
 subflag
 subfolder
+subfolders
 submodule
 submodules
 subnet
+subobject
 subprocess
 SubscribeResponse
 SubscriptionId
@@ -1483,6 +1512,7 @@ subtypes
 sudo
 SulfateConcentrationMeasurement
 SulfurDioxideConcentrationMeasurement
+superset
 suppressResponse
 svg
 SVR
@@ -1559,6 +1589,7 @@ TKIP
 TLS
 tlsr
 TLV
+TLX
 tmp
 tngvndl
 TODO
@@ -1578,6 +1609,8 @@ TotalVolatileOrganicCompoundsConcentrationMeasurement
 TPK
 trackAlloc
 trackFree
+tradeoff
+tradeoffs
 transcoder
 TransferSession
 transitionTime
@@ -1605,6 +1638,7 @@ TXD
 txt
 uargument
 UART
+UBSan
 UDC
 udcport
 udhcpc
@@ -1630,9 +1664,11 @@ unpair
 unprovisioned
 unreferenced
 unregister
+unregisters
 unregistration
 Unsecure
 Unselect
+unsynchronized
 untrusted
 updateAvailable
 updateNotAvailable
@@ -1724,9 +1760,9 @@ xbef
 xc
 xcd
 Xcode
+Xcode's
 xcodebuild
 xcodeproj
-Xcode's
 xcworkspace
 xd
 xds
