@@ -452,9 +452,9 @@ std::optional<uint8_t> JsonSocToPercent(const Json::Value & value)
 uint32_t SessionUuidToMatterId(std::string_view uuid)
 {
     uint32_t hash = 2166136261u;
-    for (unsigned char c : uuid)
+    for (char c : uuid)
     {
-        hash ^= c;
+        hash ^= static_cast<unsigned char>(c);
         hash *= 16777619u;
     }
     return hash;
@@ -531,8 +531,11 @@ std::optional<StateEnum> ParseSessionInfoState(std::string_view state)
         { "Finished", StateEnum::kPluggedInNoDemand },
         { "FinishedEVSE", StateEnum::kPluggedInNoDemand },
         { "FinishedEV", StateEnum::kPluggedInNoDemand },
+        // HwSetState only accepts NotPluggedIn / PluggedInNoDemand / PluggedInDemand: the delegate's state
+        // machine derives PluggedInCharging from demand + SupplyState. session_info is republished periodically,
+        // so this mapping is also what resynchronises the State after chip-evse-app restarts mid-session.
         { "ChargingPausedEVSE", StateEnum::kPluggedInDemand },
-        { "Charging", StateEnum::kPluggedInCharging },
+        { "Charging", StateEnum::kPluggedInDemand },
     };
 
     const auto selector = kSessionInfoStates.find(state);
@@ -665,8 +668,8 @@ EverestMqttThread::ConnectionState EverestMqttThread::GetConnectionState() const
     return mConnectionState.load();
 }
 
-void EverestMqttThread::HandleMatterStateChange(chip::app::Clusters::EnergyEvse::StateEnum state,
-                                                chip::app::Clusters::EnergyEvse::SupplyStateEnum supplyState)
+void EverestMqttThread::OnStateChanged(chip::app::Clusters::EnergyEvse::StateEnum state,
+                                       chip::app::Clusters::EnergyEvse::SupplyStateEnum supplyState)
 {
     if (gApplyingEVerestFault)
     {
@@ -711,7 +714,7 @@ void EverestMqttThread::HandleMatterStateChange(chip::app::Clusters::EnergyEvse:
     }
 }
 
-void EverestMqttThread::HandleMatterMaximumChargeCurrentChange(int64_t maximumChargeCurrent)
+void EverestMqttThread::OnMaximumChargeCurrentChanged(int64_t maximumChargeCurrent)
 {
     if (maximumChargeCurrent < 0)
     {
@@ -749,8 +752,8 @@ void EverestMqttThread::SynchronizeMatterSupplyState(intptr_t context)
     }
 
     auto * instance = manufacturer->GetEvseInstance();
-    self->HandleMatterStateChange(instance->GetState(), instance->GetSupplyState());
-    self->HandleMatterMaximumChargeCurrentChange(instance->GetMaximumChargeCurrent());
+    self->OnStateChanged(instance->GetState(), instance->GetSupplyState());
+    self->OnMaximumChargeCurrentChanged(instance->GetMaximumChargeCurrent());
 }
 
 void EverestMqttThread::CompleteExternalEnergyLimitsBootstrap(intptr_t context)
@@ -772,7 +775,7 @@ void EverestMqttThread::CompleteExternalEnergyLimitsBootstrap(intptr_t context)
     }
 
     self->mExternalEnergyLimitsState = ExternalEnergyLimitsState::Active;
-    self->HandleMatterMaximumChargeCurrentChange(manufacturer->GetEvseInstance()->GetMaximumChargeCurrent());
+    self->OnMaximumChargeCurrentChanged(manufacturer->GetEvseInstance()->GetMaximumChargeCurrent());
 }
 
 void EverestMqttThread::HandleConnect(struct mosquitto * mosq, void * obj, int rc)

@@ -18,6 +18,7 @@
 
 #include <AppMain.h>
 #include <EnergyEvseMain.h>
+#include <EVSEManufacturerImpl.h>
 #include <EnergyManagementAppCmdLineOptions.h>
 #include <EverestMqttThread.h>
 #include <Identify.h>
@@ -25,6 +26,7 @@
 #include <lib/support/BitMask.h>
 
 #include <memory>
+#include <EvsePlugins.h>
 
 using namespace chip;
 using namespace chip::app;
@@ -50,11 +52,6 @@ namespace {
 std::unique_ptr<EverestMqttThread> gEverestMqttThread;
 EverestMqttThread::Config gEverestMqttConfig;
 } // namespace
-
-EverestMqttThread * GetEverestMqttThread()
-{
-    return gEverestMqttThread.get();
-}
 
 // Define the chip::ArgParser command line structures for extending the command line to support the
 // energy apps
@@ -119,18 +116,29 @@ void ApplicationInit()
     ChipLogDetail(AppServer, "EVSE App: ApplicationInit()");
     SuccessOrDie(IdentifyInit());
     EvseApplicationInit();
+    // Optional extensions linked in with the evse_app_plugins GN argument
+    chip::app::Clusters::EnergyEvse::InitEvsePlugins(kEvseEndpoint);
     gEverestMqttThread = std::make_unique<EverestMqttThread>(gEverestMqttConfig);
     gEverestMqttThread->Start();
+    if (EnergyEvse::EVSEManufacturer * manufacturer = EnergyEvse::GetEvseManufacturer())
+    {
+        manufacturer->SetStateObserver(gEverestMqttThread.get());
+    }
 }
 
 void ApplicationShutdown()
 {
     ChipLogDetail(AppServer, "EVSE App: ApplicationShutdown()");
+    if (EnergyEvse::EVSEManufacturer * manufacturer = EnergyEvse::GetEvseManufacturer())
+    {
+        manufacturer->SetStateObserver(nullptr);
+    }
     if (gEverestMqttThread)
     {
         gEverestMqttThread->Stop();
         gEverestMqttThread.reset();
     }
+    chip::app::Clusters::EnergyEvse::ShutdownEvsePlugins();
     EvseApplicationShutdown();
 }
 
